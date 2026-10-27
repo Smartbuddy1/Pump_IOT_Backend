@@ -22,6 +22,8 @@ const feedbackRoutes = require('./routes/feedbackRoutes');
 const initMqtt = require('./services/mqttService');
 
 const app = express();
+// Enable trusting reverse proxy (Nginx) for express-rate-limit and client IP tracking
+app.set('trust proxy', 1);
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
@@ -92,6 +94,7 @@ const limiter = rateLimit({
   max: 50000, // relaxed limit to avoid blocking dashboard polling & local development
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { xForwardedForHeader: false },
   message: { success: false, message: 'Too many requests, please try again later' }
 });
 app.use('/api', limiter);
