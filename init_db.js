@@ -86,6 +86,9 @@ const initDatabase = async () => {
         humidity NUMERIC,
         odour NUMERIC,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
     // 7. Feedbacks table
     await db.query(`
       CREATE TABLE IF NOT EXISTS feedbacks (
