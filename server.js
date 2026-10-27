@@ -36,6 +36,29 @@ app.set('io', io);
 
 io.on('connection', (socket) => {
   logger.info(`New client connected to WebSockets: ${socket.id}`);
+
+  // Multi-tenant room isolation
+  socket.on('join_tenant', (tenantData) => {
+    try {
+      if (!tenantData) return;
+      const { role, omcId, roId } = tenantData;
+      if (role === 'Super Admin') {
+        socket.join('super_admin');
+        logger.info(`Socket ${socket.id} joined super_admin room`);
+      }
+      if (omcId) {
+        socket.join(`omc_${omcId}`);
+        logger.info(`Socket ${socket.id} joined omc_${omcId} room`);
+      }
+      if (roId) {
+        socket.join(`ro_${roId}`);
+        logger.info(`Socket ${socket.id} joined ro_${roId} room`);
+      }
+    } catch (roomErr) {
+      logger.error(`Error joining tenant room: ${roomErr.message}`);
+    }
+  });
+
   socket.on('disconnect', () => {
     logger.info(`Client disconnected: ${socket.id}`);
   });
@@ -99,9 +122,44 @@ app.use((req, res, next) => {
 app.use(errorHandler);
 
 // Start Server
-server.listen(port, () => {
+const runningServer = server.listen(port, () => {
   logger.info(`Server is running on http://localhost:${port} 🚀`);
   
   // Initialize MQTT Client to listen for hardware data
   initMqtt(io);
+});
+
+// ── Graceful Shutdown & Process Monitoring ────────────────────────
+const db = require('./config/db');
+
+const shutdown = async (signal) => {
+  logger.info(`Received ${signal}. Gracefully shutting down...`);
+  runningServer.close(async () => {
+    logger.info('HTTP server closed.');
+    try {
+      if (db.pool) {
+        await db.pool.end();
+        logger.info('PostgreSQL pool drained.');
+      }
+    } catch (e) {
+      logger.error(`Error during DB pool drain: ${e.message}`);
+    }
+    process.exit(0);
+  });
+
+  setTimeout(() => {
+    logger.error('Forcefully shutting down due to timeout.');
+    process.exit(1);
+  }, 10000);
+};
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error(`Unhandled Rejection at: ${promise}, reason: ${reason}`);
+});
+
+process.on('uncaughtException', (err) => {
+  logger.error(`Uncaught Exception: ${err.message}`, { stack: err.stack });
 });

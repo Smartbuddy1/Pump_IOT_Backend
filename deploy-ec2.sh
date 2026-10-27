@@ -26,6 +26,14 @@ npm install --production
 # .env.production → .env copy करा
 cp .env.production .env
 
+# Check Mosquitto MQTT Broker service
+if systemctl is-active --quiet mosquitto; then
+    echo "✅ Mosquitto MQTT Broker is running on port 1883"
+else
+    echo "⚠️ Mosquitto not running. Attempting to restart..."
+    sudo systemctl restart mosquitto || true
+fi
+
 # PM2 ने backend start/restart करा
 if pm2 list | grep -q "petroleum-backend"; then
     pm2 restart petroleum-backend

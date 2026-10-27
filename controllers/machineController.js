@@ -237,6 +237,23 @@ exports.updateMachine = async (req, res, next) => {
     const targetDbId = isNum ? parseInt(id, 10) : null;
     const targetName = String(name || id || '').trim();
 
+    // 1. Verify machine exists and check tenant permissions
+    const existingMachineRes = isNum
+      ? await db.query('SELECT m.id, m.name, m.ro_id, r.omc_id FROM machines m LEFT JOIN ro r ON m.ro_id = r.id WHERE m.id = $1 OR m.name = $2', [targetDbId, targetName])
+      : await db.query('SELECT m.id, m.name, m.ro_id, r.omc_id FROM machines m LEFT JOIN ro r ON m.ro_id = r.id WHERE m.name = $1', [targetName]);
+
+    if (existingMachineRes.rows.length === 0) {
+      return res.status(404).json(new ApiResponse(404, null, 'Machine not found'));
+    }
+    const existingMachine = existingMachineRes.rows[0];
+
+    if (req.user?.role === 'RO Manager' && existingMachine.ro_id !== req.user.roId) {
+      return res.status(403).json(new ApiResponse(403, null, 'Not authorized to update machine belonging to another RO'));
+    }
+    if (req.user?.role === 'OMC Admin' && existingMachine.omc_id !== req.user.omcId) {
+      return res.status(403).json(new ApiResponse(403, null, 'Not authorized to update machine belonging to another OMC'));
+    }
+
     const dateVal = install_date || created_at || null;
     const tempVal = String(live_temp || liveTemp || '28').replace(/[^0-9.-]/g, '') || '28';
     const waterVal = String(live_water || liveWater || 'Normal').trim();
@@ -310,22 +327,38 @@ exports.updateMachine = async (req, res, next) => {
 
 // @desc    Delete a machine
 // @route   DELETE /api/v1/machines/:id
-// @access  Private (Super Admin, OMC Admin)
+// @access  Private (Super Admin, OMC Admin, RO Manager)
 exports.deleteMachine = async (req, res, next) => {
   try {
     const { id } = req.params;
     const isNum = !isNaN(parseInt(id, 10)) && /^\d+$/.test(String(id));
     
-    // Cascading delete alerts
-    await db.query('DELETE FROM alerts WHERE machine_id = $1 OR machine_id = $2', [id, String(id)]).catch(() => {});
-    
-    let result;
-    if (isNum) {
-      result = await db.query('DELETE FROM machines WHERE id = $1 OR name = $2 RETURNING id, name', [parseInt(id, 10), String(id)]);
-    } else {
-      result = await db.query('DELETE FROM machines WHERE name = $1 RETURNING id, name', [String(id)]);
+    // 1. Verify machine exists and fetch tenant relationship
+    const machineCheck = isNum
+      ? await db.query('SELECT m.id, m.name, m.ro_id, r.omc_id FROM machines m LEFT JOIN ro r ON m.ro_id = r.id WHERE m.id = $1 OR m.name = $2', [parseInt(id, 10), String(id)])
+      : await db.query('SELECT m.id, m.name, m.ro_id, r.omc_id FROM machines m LEFT JOIN ro r ON m.ro_id = r.id WHERE m.name = $1', [String(id)]);
+
+    if (machineCheck.rows.length === 0) {
+      return res.status(404).json(new ApiResponse(404, null, 'Machine not found'));
     }
+    const machine = machineCheck.rows[0];
+
+    // 2. Tenant isolation check
+    if (req.user?.role === 'RO Manager' && machine.ro_id !== req.user.roId) {
+      return res.status(403).json(new ApiResponse(403, null, 'Not authorized to delete machine belonging to another RO'));
+    }
+    if (req.user?.role === 'OMC Admin' && machine.omc_id !== req.user.omcId) {
+      return res.status(403).json(new ApiResponse(403, null, 'Not authorized to delete machine belonging to another OMC'));
+    }
+
+    // 3. Cascading delete related records
+    await db.query('DELETE FROM alerts WHERE machine_id = $1', [machine.id]);
+    await db.query('DELETE FROM telemetry_history WHERE machine_name = $1', [machine.name]);
+    await db.query('DELETE FROM feedbacks WHERE machine_id = $1 OR machine_name = $2', [machine.id, machine.name]);
     
-    res.status(200).json(new ApiResponse(200, result?.rows?.[0] || null, 'Machine deleted successfully'));
+    // 4. Delete the machine
+    await db.query('DELETE FROM machines WHERE id = $1', [machine.id]);
+    
+    res.status(200).json(new ApiResponse(200, { id: machine.id, name: machine.name }, 'Machine deleted successfully'));
   } catch (error) { next(error); }
 };

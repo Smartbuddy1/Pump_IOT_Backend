@@ -71,13 +71,8 @@ exports.login = async (req, res, next) => {
       return res.status(401).json(new ApiResponse(401, null, 'Invalid credentials or user account does not exist'));
     }
 
-    // 2. Validate password
-    let isMatch = false;
-    if (user.role === 'Super Admin' && username === '9284188705' && password === 'Akshay@123') {
-      isMatch = true;
-    } else {
-      isMatch = await bcrypt.compare(password, user.password);
-    }
+    // 2. Validate password securely via bcrypt
+    const isMatch = await bcrypt.compare(password, user.password);
 
     if (!isMatch) {
       return res.status(401).json(new ApiResponse(401, null, 'Invalid credentials'));

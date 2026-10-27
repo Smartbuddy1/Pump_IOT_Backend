@@ -106,7 +106,20 @@ const initDatabase = async () => {
       );
     `);
 
-    console.log('All tables verified/created successfully! 🚀');
+    // 8. Performance Indexes
+    await db.query(`
+      CREATE INDEX IF NOT EXISTS idx_telemetry_machine_date ON telemetry_history (machine_name, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_telemetry_created_at ON telemetry_history (created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_machines_ro_id ON machines (ro_id);
+      CREATE INDEX IF NOT EXISTS idx_machines_name ON machines (name);
+      CREATE INDEX IF NOT EXISTS idx_ro_omc_id ON ro (omc_id);
+      CREATE INDEX IF NOT EXISTS idx_alerts_machine_status ON alerts (machine_id, status);
+      CREATE INDEX IF NOT EXISTS idx_alerts_timestamp ON alerts (timestamp DESC);
+      CREATE INDEX IF NOT EXISTS idx_feedbacks_machine_id ON feedbacks (machine_id);
+      CREATE INDEX IF NOT EXISTS idx_feedbacks_ro_omc ON feedbacks (ro_id, omc_id);
+    `);
+
+    console.log('All tables and indexes verified/created successfully! 🚀');
 
     // Seed default Super Admin user if not exists
     const adminCheck = await db.query("SELECT * FROM users WHERE username = '9284188705'");
