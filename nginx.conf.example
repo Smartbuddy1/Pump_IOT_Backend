@@ -1,0 +1,58 @@
+# ================================================================
+#  AWS EC2 - NGINX CONFIGURATION
+#  File: /etc/nginx/sites-available/petroleum-iot
+#
+#  Setup Steps:
+#  1. sudo nano /etc/nginx/sites-available/petroleum-iot
+#  2. खालील content paste करा (YOUR_DOMAIN_OR_IP replace करा)
+#  3. sudo ln -s /etc/nginx/sites-available/petroleum-iot /etc/nginx/sites-enabled/
+#  4. sudo nginx -t && sudo systemctl reload nginx
+# ================================================================
+
+server {
+    listen 80;
+    server_name YOUR_EC2_PUBLIC_IP_OR_DOMAIN;
+
+    # ── Frontend (React build files) ──────────────────────────
+    root /home/ubuntu/petroleum-iot/frontend/dist;
+    index index.html;
+
+    client_max_body_size 20M;
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
+
+    # Handle React Router (SPA)
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # ── Backend API Proxy ─────────────────────────────────────
+    location /api/ {
+        proxy_pass http://localhost:5000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+    }
+
+    # ── Socket.IO WebSocket Proxy ─────────────────────────────
+    location /socket.io/ {
+        proxy_pass http://localhost:5000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_cache_bypass $http_upgrade;
+    }
+
+    # ── Static file caching ───────────────────────────────────
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+}
