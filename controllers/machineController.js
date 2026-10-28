@@ -190,6 +190,15 @@ exports.createMachine = async (req, res, next) => {
         nLow, nDang, sLow, sDang, wTrig
       ]
     );
+    
+    if (wifiN) {
+      try {
+        const { publishMachineCommand } = require('../services/mqttService');
+        publishMachineCommand(cleanName, `SET_WIFI:${wifiN},${wifiP || ''}`);
+      } catch (mErr) {
+        logger.warn(`[createMachine] Failed to publish MQTT WiFi command: ${mErr.message}`);
+      }
+    }
     res.status(201).json(new ApiResponse(201, result.rows[0], 'Machine created successfully'));
   } catch (error) { next(error); }
 };
@@ -343,6 +352,15 @@ exports.updateMachine = async (req, res, next) => {
     const query = `UPDATE machines SET ${fields.join(', ')} ${whereClause} RETURNING *`;
     const result = await db.query(query, params);
     if (result.rows.length === 0) return res.status(404).json(new ApiResponse(404, null, 'Machine not found'));
+    
+    if (wifiN) {
+      try {
+        const { publishMachineCommand } = require('../services/mqttService');
+        publishMachineCommand(targetName, `SET_WIFI:${wifiN},${wifiP || ''}`);
+      } catch (mErr) {
+        logger.warn(`[updateMachine] Failed to publish MQTT WiFi command: ${mErr.message}`);
+      }
+    }
     res.status(200).json(new ApiResponse(200, result.rows[0], 'Machine updated successfully'));
   } catch (error) { next(error); }
 };

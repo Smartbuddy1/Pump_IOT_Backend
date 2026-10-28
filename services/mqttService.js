@@ -7,6 +7,7 @@ const MQTT_BROKER = process.env.MQTT_BROKER || 'mqtt://localhost:1883';
 const MQTT_TOPIC = process.env.MQTT_TOPIC || 'petroleum/iot/telemetry/+';
 const MQTT_STATUS_TOPIC = process.env.MQTT_STATUS_TOPIC || 'petroleum/iot/status/+';
 const MQTT_ALERTS_TOPIC = process.env.MQTT_ALERTS_TOPIC || 'petroleum/iot/alerts/+';
+const MQTT_COMMANDS_TOPIC = process.env.MQTT_COMMANDS_TOPIC || 'petroleum/iot/commands/+';
 
 const mqttOptions = {
   clientId: process.env.MQTT_CLIENT_ID || `backend_iot_${Math.random().toString(16).substring(2, 8)}`,
@@ -54,7 +55,7 @@ const initMqtt = (io) => {
     logger.info('Connected to Mosquitto MQTT Broker successfully! 📡');
     
     // Subscribe to telemetry, status (LWT), and direct alerts
-    const topicsToSubscribe = [MQTT_TOPIC, MQTT_STATUS_TOPIC, MQTT_ALERTS_TOPIC];
+    const topicsToSubscribe = [MQTT_TOPIC, MQTT_STATUS_TOPIC, MQTT_ALERTS_TOPIC, MQTT_COMMANDS_TOPIC];
     mqttClient.subscribe(topicsToSubscribe, { qos: 1 }, (err, granted) => {
       if (err) {
         logger.error(`[MQTT] Subscription Error: ${err.message}`);
@@ -190,8 +191,45 @@ const initMqtt = (io) => {
 
         logger.info(`[MQTT Processed] Telemetry updated for ${machineIdStr}`);
       }
+      // ── 3. Handle SET_WIFI / Remote WiFi Configuration ────────────────────
+      else if (payload.includes('SET_WIFI') || payload.includes('WIFI:')) {
+        let ssid = '';
+        let pass = '';
 
-      // ── 3. Handle ALERT Messages ───────────────────────────────────────────
+        if (payload.includes('SET_WIFI:')) {
+          const afterColon = payload.split('SET_WIFI:')[1] || '';
+          const commaIdx = afterColon.indexOf(',');
+          if (commaIdx !== -1) {
+            ssid = afterColon.substring(0, commaIdx).trim();
+            pass = afterColon.substring(commaIdx + 1).trim();
+          } else {
+            ssid = afterColon.trim();
+          }
+        } else if (payload.includes('SET_WIFI,')) {
+          const sub = payload.split('SET_WIFI,')[1].split(',');
+          ssid = sub[0]?.trim() || '';
+          pass = sub[1]?.trim() || '';
+        }
+
+        if (ssid) {
+          await pool.query(
+            'UPDATE machines SET wifi_name = $1, wifi_password = $2 WHERE LOWER(name) = LOWER($3)',
+            [ssid, pass, machineIdStr]
+          );
+          logger.info(`[MQTT WiFi] Updated WiFi credentials for ${machineIdStr}: SSID="${ssid}"`);
+
+          if (io) {
+            const wifiPayload = { machineId: machineIdStr, wifiName: ssid, wifiPassword: pass };
+            if (machineInfo?.omc_id) io.to(`omc_${machineInfo.omc_id}`).emit('machine_wifi_update', wifiPayload);
+            if (machineInfo?.ro_id) io.to(`ro_${machineInfo.ro_id}`).emit('machine_wifi_update', wifiPayload);
+            io.to('super_admin').emit('machine_wifi_update', wifiPayload);
+          }
+        }
+      }
+
+
+
+      // ── 4. Handle ALERT Messages ───────────────────────────────────────────
       else if (command === 'ALERT' && parts.length >= 3) {
         const alertMsg = parts[2];
 
@@ -242,5 +280,23 @@ const initMqtt = (io) => {
 
 const getMqttClient = () => mqttClient;
 
+const publishMachineCommand = (machineName, commandStr) => {
+  if (!mqttClient || !mqttClient.connected) {
+    logger.warn(`[MQTT] Cannot publish command to ${machineName}: MQTT client not connected`);
+    return false;
+  }
+  try {
+    const payload = commandStr.startsWith(machineName) ? commandStr : `${machineName},${commandStr}`;
+    mqttClient.publish(`petroleum/iot/commands/${machineName}`, payload, { qos: 1 });
+    mqttClient.publish(`petroleum/iot/telemetry/${machineName}`, payload, { qos: 1 });
+    logger.info(`[MQTT Published Command] ${payload}`);
+    return true;
+  } catch (err) {
+    logger.error(`[MQTT Publish Error]: ${err.message}`);
+    return false;
+  }
+};
+
 module.exports = initMqtt;
 module.exports.getMqttClient = getMqttClient;
+module.exports.publishMachineCommand = publishMachineCommand;
