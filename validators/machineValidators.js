@@ -19,6 +19,6 @@ exports.machineValidation = [
     .optional()
     .isInt({ min: 0, max: 100 }).withMessage('Health score must be between 0 and 100'),
   body('last_maintenance')
-    .optional()
+    .optional({ values: 'falsy' })
     .isISO8601().withMessage('Last maintenance must be a valid date')
 ];

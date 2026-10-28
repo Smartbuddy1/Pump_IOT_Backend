@@ -89,6 +89,14 @@ exports.updateAlert = async (req, res, next) => {
     const omcId = req.user?.omcId;
     const roId = req.user?.roId;
 
+    const isNumericId = !isNaN(parseInt(id, 10)) && /^\d+$/.test(String(id));
+    if (!isNumericId) {
+      // Gracefully handle client-side live telemetry alert tags
+      return res.status(200).json(new ApiResponse(200, { id, status: status || 'Resolved' }, 'Alert updated successfully'));
+    }
+
+    const numericId = parseInt(id, 10);
+
     // Fetch alert with machine's tenant info to verify authorization
     const alertCheck = await db.query(
       `SELECT a.id, a.machine_id, m.ro_id, r.omc_id
@@ -96,7 +104,7 @@ exports.updateAlert = async (req, res, next) => {
        LEFT JOIN machines m ON a.machine_id = m.id
        LEFT JOIN ro r ON m.ro_id = r.id
        WHERE a.id = $1`,
-      [id]
+      [numericId]
     );
     if (alertCheck.rows.length === 0) {
       return res.status(404).json(new ApiResponse(404, null, 'Alert not found'));
@@ -113,7 +121,7 @@ exports.updateAlert = async (req, res, next) => {
 
     const result = await db.query(
       'UPDATE alerts SET status = $1 WHERE id = $2 RETURNING *',
-      [status, id]
+      [status, numericId]
     );
     if (result.rows.length === 0) return res.status(404).json(new ApiResponse(404, null, 'Alert not found'));
     res.status(200).json(new ApiResponse(200, result.rows[0], 'Alert updated successfully'));
@@ -126,7 +134,12 @@ exports.updateAlert = async (req, res, next) => {
 exports.deleteAlert = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const result = await db.query('DELETE FROM alerts WHERE id = $1 RETURNING id', [id]);
+    const isNumericId = !isNaN(parseInt(id, 10)) && /^\d+$/.test(String(id));
+    if (!isNumericId) {
+      return res.status(200).json(new ApiResponse(200, null, 'Alert deleted successfully'));
+    }
+    const numericId = parseInt(id, 10);
+    const result = await db.query('DELETE FROM alerts WHERE id = $1 RETURNING id', [numericId]);
     if (result.rows.length === 0) return res.status(404).json(new ApiResponse(404, null, 'Alert not found'));
     res.status(200).json(new ApiResponse(200, null, 'Alert deleted successfully'));
   } catch (error) { next(error); }

@@ -59,9 +59,51 @@ const initDatabase = async () => {
         live_water VARCHAR(50) DEFAULT '0',
         live_humidity VARCHAR(50) DEFAULT '0',
         live_odour VARCHAR(50) DEFAULT '0',
+        live_nh3 VARCHAR(50) DEFAULT '0',
+        live_h2s VARCHAR(50) DEFAULT '0',
+        wifi_name VARCHAR(255),
+        wifi_password VARCHAR(255),
+        install_date VARCHAR(50),
+        temp_limit_low VARCHAR(50) DEFAULT '20',
+        temp_limit_medium VARCHAR(50) DEFAULT '30',
+        temp_limit_danger VARCHAR(50) DEFAULT '41',
+        humidity_limit_low VARCHAR(50) DEFAULT '35',
+        humidity_limit_medium VARCHAR(50) DEFAULT '70',
+        humidity_limit_danger VARCHAR(50) DEFAULT '76',
+        odour_limit_low VARCHAR(50) DEFAULT '40',
+        odour_limit_medium VARCHAR(50) DEFAULT '60',
+        odour_limit_danger VARCHAR(50) DEFAULT '71',
+        nh3_limit_low VARCHAR(50) DEFAULT '25',
+        nh3_limit_danger VARCHAR(50) DEFAULT '50',
+        h2s_limit_low VARCHAR(50) DEFAULT '10',
+        h2s_limit_danger VARCHAR(50) DEFAULT '20',
+        water_level_trigger VARCHAR(50) DEFAULT 'Low',
         last_maintenance DATE,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
+
+      ALTER TABLE machines
+        ADD COLUMN IF NOT EXISTS live_nh3 VARCHAR(50) DEFAULT '0',
+        ADD COLUMN IF NOT EXISTS live_h2s VARCHAR(50) DEFAULT '0',
+        ADD COLUMN IF NOT EXISTS wifi_name VARCHAR(255),
+        ADD COLUMN IF NOT EXISTS wifi_password VARCHAR(255),
+        ADD COLUMN IF NOT EXISTS install_date VARCHAR(50),
+        ADD COLUMN IF NOT EXISTS temp_limit_low VARCHAR(50) DEFAULT '20',
+        ADD COLUMN IF NOT EXISTS temp_limit_medium VARCHAR(50) DEFAULT '30',
+        ADD COLUMN IF NOT EXISTS temp_limit_danger VARCHAR(50) DEFAULT '41',
+        ADD COLUMN IF NOT EXISTS humidity_limit_low VARCHAR(50) DEFAULT '35',
+        ADD COLUMN IF NOT EXISTS humidity_limit_medium VARCHAR(50) DEFAULT '70',
+        ADD COLUMN IF NOT EXISTS humidity_limit_danger VARCHAR(50) DEFAULT '76',
+        ADD COLUMN IF NOT EXISTS odour_limit_low VARCHAR(50) DEFAULT '40',
+        ADD COLUMN IF NOT EXISTS odour_limit_medium VARCHAR(50) DEFAULT '60',
+        ADD COLUMN IF NOT EXISTS odour_limit_danger VARCHAR(50) DEFAULT '71',
+        ADD COLUMN IF NOT EXISTS nh3_limit_low VARCHAR(50) DEFAULT '25',
+        ADD COLUMN IF NOT EXISTS nh3_limit_danger VARCHAR(50) DEFAULT '50',
+        ADD COLUMN IF NOT EXISTS h2s_limit_low VARCHAR(50) DEFAULT '10',
+        ADD COLUMN IF NOT EXISTS h2s_limit_danger VARCHAR(50) DEFAULT '20',
+        ADD COLUMN IF NOT EXISTS water_level_trigger VARCHAR(50) DEFAULT 'Low',
+        ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
     `);
 
     // 5. Alerts table

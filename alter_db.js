@@ -6,6 +6,7 @@ const alterTables = async () => {
 
     await db.query(`
       ALTER TABLE machines 
+      ADD COLUMN IF NOT EXISTS install_date VARCHAR(50),
       ADD COLUMN IF NOT EXISTS live_temp VARCHAR(50),
       ADD COLUMN IF NOT EXISTS live_water VARCHAR(50),
       ADD COLUMN IF NOT EXISTS live_humidity VARCHAR(50),

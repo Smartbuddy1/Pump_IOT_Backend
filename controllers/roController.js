@@ -36,6 +36,11 @@ exports.createRO = async (req, res, next) => {
     if (!omc_id) {
       return res.status(400).json(new ApiResponse(400, null, 'OMC selection is required'));
     }
+
+    // Role-based tenant check: OMC Admin can only create RO for their assigned OMC
+    if (req.user?.role === 'OMC Admin' && parseInt(omc_id, 10) !== parseInt(req.user.omcId, 10)) {
+      return res.status(403).json(new ApiResponse(403, null, 'Not authorized to create RO for another OMC'));
+    }
     if (!name || !String(name).trim()) {
       return res.status(400).json(new ApiResponse(400, null, 'RO Name is required'));
     }
@@ -119,6 +124,20 @@ exports.updateRO = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { name, omc_id, location, status, contact, contact_password } = req.body;
+
+    // Tenant authorization check
+    const currentRoRes = await db.query('SELECT * FROM ro WHERE id = $1', [id]);
+    if (currentRoRes.rows.length === 0) {
+      return res.status(404).json(new ApiResponse(404, null, 'RO not found'));
+    }
+    const currentRo = currentRoRes.rows[0];
+
+    if (req.user?.role === 'OMC Admin' && currentRo.omc_id !== req.user.omcId) {
+      return res.status(403).json(new ApiResponse(403, null, 'Not authorized to update an RO belonging to another OMC'));
+    }
+    if (req.user?.role === 'RO Manager' && parseInt(id, 10) !== parseInt(req.user.roId, 10)) {
+      return res.status(403).json(new ApiResponse(403, null, 'Not authorized to update another RO'));
+    }
 
     const cleanContact = String(contact || '').replace(/\D/g, '').trim();
     if (!cleanContact || cleanContact.length !== 10) {

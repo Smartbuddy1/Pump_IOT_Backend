@@ -49,6 +49,9 @@ cd "$FRONTEND_DIR"
 npm install
 npm run build  # हे .env.production automatically वापरतो
 
+# Create symlink so Nginx /p2t/ subpath directly resolves all static assets
+ln -sfn . "$FRONTEND_DIR/dist/p2t"
+
 echo "✅ Frontend build complete → dist/ folder ready"
 
 # ── Step 4: Nginx reload ──────────────────────────────────────────

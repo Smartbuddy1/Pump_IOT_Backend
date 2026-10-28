@@ -6,7 +6,15 @@ const MQTT_BROKER = process.env.MQTT_BROKER || 'mqtt://broker.hivemq.com';
 
 async function startSimulator() {
   console.log(`Connecting to MQTT Broker: ${MQTT_BROKER}...`);
-  const client = mqtt.connect(MQTT_BROKER);
+  const mqttOptions = {
+    clientId: `simulator_${Math.random().toString(16).substring(2, 8)}`,
+    clean: true,
+  };
+  if (process.env.MQTT_USERNAME) {
+    mqttOptions.username = process.env.MQTT_USERNAME;
+    mqttOptions.password = process.env.MQTT_PASSWORD || '';
+  }
+  const client = mqtt.connect(MQTT_BROKER, mqttOptions);
 
   // Fetch machines from DB or fallback
   let machineNames = ['SBP2T601', 'SBP2T101'];

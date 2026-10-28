@@ -81,7 +81,7 @@ exports.getDashboardStats = async (req, res, next) => {
     const todayRes = await pool.query(`
       SELECT COUNT(*) as today_users 
       FROM telemetry_history th
-      WHERE DATE(th.created_at) = CURRENT_DATE ${machineFilter}
+      WHERE th.created_at >= CURRENT_DATE AND th.created_at < CURRENT_DATE + INTERVAL '1 day' ${machineFilter}
     `, machineParams);
     const todayUsers = parseInt(todayRes.rows[0]?.today_users || 0, 10);
 
@@ -91,7 +91,7 @@ exports.getDashboardStats = async (req, res, next) => {
         TO_CHAR(d.day, 'Mon DD (Dy)') as full_day,
         COALESCE(COUNT(th.id), 0) as users
       FROM generate_series(CURRENT_DATE - INTERVAL '6 days', CURRENT_DATE, '1 day'::interval) d(day)
-      LEFT JOIN telemetry_history th ON DATE(th.created_at) = DATE(d.day) ${machineFilter}
+      LEFT JOIN telemetry_history th ON th.created_at >= d.day AND th.created_at < d.day + INTERVAL '1 day' ${machineFilter}
       GROUP BY d.day
       ORDER BY d.day ASC
     `, machineParams);
