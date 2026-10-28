@@ -85,6 +85,32 @@ exports.updateAlert = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
+    const role = req.user?.role;
+    const omcId = req.user?.omcId;
+    const roId = req.user?.roId;
+
+    // Fetch alert with machine's tenant info to verify authorization
+    const alertCheck = await db.query(
+      `SELECT a.id, a.machine_id, m.ro_id, r.omc_id
+       FROM alerts a
+       LEFT JOIN machines m ON a.machine_id = m.id
+       LEFT JOIN ro r ON m.ro_id = r.id
+       WHERE a.id = $1`,
+      [id]
+    );
+    if (alertCheck.rows.length === 0) {
+      return res.status(404).json(new ApiResponse(404, null, 'Alert not found'));
+    }
+    const alert = alertCheck.rows[0];
+
+    // Tenant isolation check
+    if (role === 'RO Manager' && alert.ro_id !== roId) {
+      return res.status(403).json(new ApiResponse(403, null, 'Not authorized to update alerts from another RO'));
+    }
+    if (role === 'OMC Admin' && alert.omc_id !== omcId) {
+      return res.status(403).json(new ApiResponse(403, null, 'Not authorized to update alerts from another OMC'));
+    }
+
     const result = await db.query(
       'UPDATE alerts SET status = $1 WHERE id = $2 RETURNING *',
       [status, id]

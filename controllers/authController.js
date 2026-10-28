@@ -2,11 +2,12 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const db = require('../config/db');
 const ApiResponse = require('../utils/apiResponse');
+const logger = require('../utils/logger');
 
 // Helper to sign JWT
 const signToken = (id, role) => {
   return jwt.sign({ id, role }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRE || '15m',
+    expiresIn: process.env.JWT_EXPIRE || '8h',
   });
 };
 
@@ -128,7 +129,12 @@ exports.login = async (req, res, next) => {
       }
     }, 'Login successful'));
   } catch (error) {
-    console.error('Login error:', error.message);
+    // PostgreSQL error codes starting with '08' are connection errors, '53' are resource errors
+    const isDbError = error.code && (error.code.startsWith('08') || error.code.startsWith('53') || error.code.startsWith('57'));
+    if (isDbError) {
+      return next(error); // Let global error handler return 500
+    }
+    logger.error(`Login error: ${error.message}`);
     return res.status(401).json(new ApiResponse(401, null, 'Invalid credentials'));
   }
 };

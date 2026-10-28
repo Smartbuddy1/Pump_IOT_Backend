@@ -115,13 +115,16 @@ exports.submitFeedback = async (req, res, next) => {
 
     const createdFeedback = result.rows[0];
 
-    // Broadcast live feedback event via Socket.IO if available (Feedbacks are managed in Feedbacks logs)
+    // Broadcast live feedback event via Socket.IO strictly to authorized tenant rooms
     const io = req.app.get('io');
     if (io) {
-      io.emit('new_feedback', {
+      const feedbackPayload = {
         ...createdFeedback,
         machineName: cleanMachineName
-      });
+      };
+      if (resolvedOmcId) io.to(`omc_${resolvedOmcId}`).emit('new_feedback', feedbackPayload);
+      if (resolvedRoId) io.to(`ro_${resolvedRoId}`).emit('new_feedback', feedbackPayload);
+      io.to('super_admin').emit('new_feedback', feedbackPayload);
     }
 
     res.status(201).json(new ApiResponse(201, createdFeedback, 'Feedback submitted successfully! Thank you.'));

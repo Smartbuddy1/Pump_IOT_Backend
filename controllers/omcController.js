@@ -1,3 +1,4 @@
+const logger = require('../utils/logger');
 const db = require('../config/db');
 const ApiResponse = require('../utils/apiResponse');
 const bcrypt = require('bcrypt');
@@ -10,23 +11,22 @@ exports.getOMCs = async (req, res, next) => {
     const role = req.user?.role;
     const omcId = req.user?.omcId;
     let result;
+    const safeFields = 'id, name, location, contact, status, created_at';
     if (role === 'OMC Admin' && omcId) {
       // OMC Admin only sees their own OMC
-      result = await db.query('SELECT * FROM omc WHERE id = $1', [omcId]);
+      result = await db.query(`SELECT ${safeFields} FROM omc WHERE id = $1`, [omcId]);
     } else if (role === 'RO Manager' && omcId) {
       // RO Manager sees the parent OMC
-      result = await db.query('SELECT * FROM omc WHERE id = $1', [omcId]);
+      result = await db.query(`SELECT ${safeFields} FROM omc WHERE id = $1`, [omcId]);
     } else {
       // Super Admin sees all
-      result = await db.query('SELECT * FROM omc ORDER BY created_at DESC');
+      result = await db.query(`SELECT ${safeFields} FROM omc ORDER BY created_at DESC`);
     }
-    console.log(`[getOMCs] Called by user ${req.user?.id} (${role}), returned ${result.rows.length} rows`);
+    logger.info(`[getOMCs] Called by user ${req.user?.id} (${role}), returned ${result.rows.length} rows`);
     res.status(200).json(new ApiResponse(200, result.rows, 'OMCs retrieved successfully'));
   } catch (error) { next(error); }
 };
 
-// @desc    Create an OMC
-// @route   POST /api/v1/omc
 // @desc    Create an OMC
 // @route   POST /api/v1/omc
 // @access  Private (Super Admin)
@@ -64,26 +64,41 @@ exports.createOMC = async (req, res, next) => {
       return res.status(400).json(new ApiResponse(400, null, `Phone number ${cleanContact} is already registered to an existing account. Duplicate phone number is strictly prohibited.`));
     }
     
-    // 1. Create OMC
-    const result = await db.query(
-      'INSERT INTO omc (name, location, contact, contact_password) VALUES ($1, $2, $3, $4) RETURNING *',
-      [name, location, cleanContact, contact_password]
-    );
-    const newOmc = result.rows[0];
-
-    // 2. Generate OMC Admin User
-    const rawPassword = contact_password || Math.random().toString(36).slice(-8);
+    const rawPassword = contact_password;
     const username = cleanContact;
-    
+
+    // Hash password for BOTH omc table AND users table (security fix)
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(rawPassword, salt);
 
-    await db.query(
-      'INSERT INTO users (username, password, role, omc_id) VALUES ($1, $2, $3, $4)',
-      [username, hashedPassword, 'OMC Admin', newOmc.id]
-    );
+    // Use a transaction so OMC + user creation are atomic
+    const client = await db.pool.connect();
+    let newOmc;
+    try {
+      await client.query('BEGIN');
 
-    // 3. Return OMC and Credentials
+      // 1. Create OMC (store hashed password)
+      const omcResult = await client.query(
+        'INSERT INTO omc (name, location, contact, contact_password) VALUES ($1, $2, $3, $4) RETURNING id, name, location, contact, status, created_at',
+        [name, location, cleanContact, hashedPassword]
+      );
+      newOmc = omcResult.rows[0];
+
+      // 2. Create OMC Admin user (hashed password)
+      await client.query(
+        'INSERT INTO users (username, password, role, omc_id) VALUES ($1, $2, $3, $4)',
+        [username, hashedPassword, 'OMC Admin', newOmc.id]
+      );
+
+      await client.query('COMMIT');
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      throw txErr;
+    } finally {
+      client.release();
+    }
+
+    // 3. Return OMC and plain credentials (shown once only)
     res.status(201).json(new ApiResponse(201, {
       ...newOmc,
       credentials: { username, password: rawPassword }
@@ -103,8 +118,10 @@ exports.updateOMC = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { name, location, contact, contact_password } = req.body;
-    if (!contact_password) {
-      return res.status(400).json(new ApiResponse(400, null, 'Password is required'));
+
+    // Tenant authorization check to prevent IDOR
+    if (req.user?.role === 'OMC Admin' && parseInt(id, 10) !== parseInt(req.user.omcId, 10)) {
+      return res.status(403).json(new ApiResponse(403, null, 'Not authorized to update another OMC'));
     }
 
     const cleanContact = String(contact || '').replace(/\D/g, '').trim();
@@ -128,16 +145,34 @@ exports.updateOMC = async (req, res, next) => {
       return res.status(400).json(new ApiResponse(400, null, `Phone number ${cleanContact} is already registered to another account. Duplicate phone number is strictly prohibited.`));
     }
 
+    // Check if a new raw password was supplied (must not be an existing bcrypt hash)
+    const isNewRawPassword = contact_password && 
+      typeof contact_password === 'string' && 
+      contact_password.trim() !== '' && 
+      !contact_password.startsWith('$2a$') && 
+      !contact_password.startsWith('$2b$');
+
+    let updateFields = 'name = $1, location = $2, contact = $3';
+    let updateParams = [name, location, cleanContact];
+
+    if (isNewRawPassword) {
+      const saltForUpdate = await bcrypt.genSalt(10);
+      const hashedPwdForOmc = await bcrypt.hash(contact_password.trim(), saltForUpdate);
+      updateFields += ', contact_password = $4';
+      updateParams.push(hashedPwdForOmc);
+    }
+    updateParams.push(id);
+
     const result = await db.query(
-      'UPDATE omc SET name = $1, location = $2, contact = $3, contact_password = $4 WHERE id = $5 RETURNING *',
-      [name, location, cleanContact, contact_password, id]
+      `UPDATE omc SET ${updateFields} WHERE id = $${updateParams.length} RETURNING id, name, location, contact, status, created_at`,
+      updateParams
     );
     if (result.rows.length === 0) return res.status(404).json(new ApiResponse(404, null, 'OMC not found'));
     
-    // Also update the user's password if it was changed
-    if (contact_password) {
+    // Also update the user's password ONLY if a new raw password was supplied
+    if (isNewRawPassword) {
       const salt = await bcrypt.genSalt(10);
-      const hashedPassword = await bcrypt.hash(contact_password, salt);
+      const hashedPassword = await bcrypt.hash(contact_password.trim(), salt);
       await db.query(
         'UPDATE users SET password = $1, username = $2 WHERE omc_id = $3 AND role = $4',
         [hashedPassword, cleanContact, id, 'OMC Admin']

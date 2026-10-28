@@ -22,13 +22,48 @@ const feedbackRoutes = require('./routes/feedbackRoutes');
 const initMqtt = require('./services/mqttService');
 
 const app = express();
+const jwt = require('jsonwebtoken');
+const db = require('./config/db');
+
 // Enable trusting reverse proxy (Nginx) for express-rate-limit and client IP tracking
 app.set('trust proxy', 1);
 const server = http.createServer(app);
+
+const ALLOWED_ORIGINS = [
+  'https://aaryainnovtech.com',
+  'http://13.232.110.133',
+  'https://13.232.110.133',
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:5175',
+  'http://localhost:5000',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:5174',
+  'http://127.0.0.1:5175',
+  'http://127.0.0.1:5000',
+];
+if (process.env.CLIENT_URL && !ALLOWED_ORIGINS.includes(process.env.CLIENT_URL)) {
+  ALLOWED_ORIGINS.push(process.env.CLIENT_URL);
+}
+
+const corsOriginChecker = (origin, callback) => {
+  // Allow requests with no origin (e.g. mobile apps, curl, Postman, internal services)
+  if (!origin) return callback(null, true);
+  if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+  try {
+    const url = new URL(origin);
+    if (url.hostname === 'aaryainnovtech.com' || url.hostname === '13.232.110.133' || url.hostname.endsWith('.aaryainnovtech.com')) {
+      return callback(null, true);
+    }
+  } catch (e) {}
+  return callback(new Error(`CORS blocked: Origin ${origin} not allowed`));
+};
+
 const io = new Server(server, {
   cors: {
-    origin: '*', // For enterprise, restrict this to frontend URL later
-    methods: ['GET', 'POST', 'PUT', 'DELETE']
+    origin: corsOriginChecker,
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    credentials: true
   }
 });
 const port = process.env.PORT || 5000;
@@ -36,29 +71,74 @@ const port = process.env.PORT || 5000;
 // Expose io to routes if needed
 app.set('io', io);
 
-io.on('connection', (socket) => {
-  logger.info(`New client connected to WebSockets: ${socket.id}`);
+// ── Socket.IO JWT Authentication Middleware ───────────────────────
+io.use(async (socket, next) => {
+  try {
+    const token = socket.handshake.auth?.token ||
+      (socket.handshake.headers?.authorization && socket.handshake.headers.authorization.split(' ')[1]);
 
-  // Multi-tenant room isolation
-  socket.on('join_tenant', (tenantData) => {
-    try {
-      if (!tenantData) return;
-      const { role, omcId, roId } = tenantData;
-      if (role === 'Super Admin') {
-        socket.join('super_admin');
-        logger.info(`Socket ${socket.id} joined super_admin room`);
-      }
-      if (omcId) {
-        socket.join(`omc_${omcId}`);
-        logger.info(`Socket ${socket.id} joined omc_${omcId} room`);
-      }
-      if (roId) {
-        socket.join(`ro_${roId}`);
-        logger.info(`Socket ${socket.id} joined ro_${roId} room`);
-      }
-    } catch (roomErr) {
-      logger.error(`Error joining tenant room: ${roomErr.message}`);
+    if (!token) {
+      socket.user = null;
+      return next(); // Allow guest/public sockets with null user
     }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const userResult = await db.query(
+      'SELECT id, username, role, omc_id, ro_id FROM users WHERE id = $1',
+      [decoded.id]
+    );
+
+    if (userResult.rows.length === 0) {
+      socket.user = null;
+      return next();
+    }
+
+    const user = userResult.rows[0];
+    socket.user = {
+      id: user.id,
+      username: user.username,
+      role: user.role,
+      omcId: user.omc_id,
+      roId: user.ro_id
+    };
+    next();
+  } catch (err) {
+    logger.warn(`Socket.IO authentication verification failed: ${err.message}`);
+    socket.user = null;
+    next();
+  }
+});
+
+io.on('connection', (socket) => {
+  logger.info(`Client connected to WebSockets: ${socket.id} (User: ${socket.user?.username || 'Guest'})`);
+
+  // Secure automatic room assignment based on verified database record
+  if (socket.user) {
+    const { role, omcId, roId } = socket.user;
+    if (role === 'Super Admin') {
+      socket.join('super_admin');
+      logger.info(`Socket ${socket.id} auto-joined super_admin room`);
+    }
+    if (omcId) {
+      socket.join(`omc_${omcId}`);
+      logger.info(`Socket ${socket.id} auto-joined omc_${omcId} room`);
+    }
+    if (roId) {
+      socket.join(`ro_${roId}`);
+      logger.info(`Socket ${socket.id} auto-joined ro_${roId} room`);
+    }
+  }
+
+  // Prevent client from spoofing tenant rooms; verify against authenticated socket.user
+  socket.on('join_tenant', () => {
+    if (!socket.user) {
+      logger.warn(`Unauthenticated socket ${socket.id} attempted to join_tenant. Ignored.`);
+      return;
+    }
+    const { role, omcId, roId } = socket.user;
+    if (role === 'Super Admin') socket.join('super_admin');
+    if (omcId) socket.join(`omc_${omcId}`);
+    if (roId) socket.join(`ro_${roId}`);
   });
 
   socket.on('disconnect', () => {
@@ -69,9 +149,7 @@ io.on('connection', (socket) => {
 // Middleware
 app.use(helmet()); // Enterprise Level Security Headers
 app.use(cors({
-  origin: function(origin, callback) {
-    return callback(null, true);
-  },
+  origin: corsOriginChecker,
   credentials: true
 }));
 app.use(express.json());
@@ -88,10 +166,10 @@ const morganMiddleware = morgan(
 );
 app.use(morganMiddleware);
 
-// Rate Limiting - relaxed for development & real-time telemetry polling
+// Rate Limiting - 500 per 15 min per IP is enough for dashboard polling
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 50000, // relaxed limit to avoid blocking dashboard polling & local development
+  max: 5000, // relaxed for multi-user office NAT and dashboard polling
   standardHeaders: true,
   legacyHeaders: false,
   validate: { xForwardedForHeader: false },
@@ -130,10 +208,28 @@ const runningServer = server.listen(port, () => {
   
   // Initialize MQTT Client to listen for hardware data
   initMqtt(io);
+
+  // Automated Telemetry Retention Pruning (runs 1 min after startup, then every 24 hours)
+  const pruneTelemetry = async () => {
+    try {
+      const days = parseInt(process.env.TELEMETRY_RETENTION_DAYS, 10) || 60;
+      const pruneRes = await db.query(
+        "DELETE FROM telemetry_history WHERE created_at < NOW() - (INTERVAL '1 day' * $1)",
+        [days]
+      );
+      if (pruneRes.rowCount > 0) {
+        logger.info(`[Retention] Pruned ${pruneRes.rowCount} telemetry records older than ${days} days.`);
+      }
+    } catch (e) {
+      logger.error(`[Retention] Failed to prune telemetry: ${e.message}`);
+    }
+  };
+  setTimeout(pruneTelemetry, 60 * 1000);
+  setInterval(pruneTelemetry, 24 * 60 * 60 * 1000);
 });
 
 // ── Graceful Shutdown & Process Monitoring ────────────────────────
-const db = require('./config/db');
+
 
 const shutdown = async (signal) => {
   logger.info(`Received ${signal}. Gracefully shutting down...`);
@@ -166,3 +262,4 @@ process.on('unhandledRejection', (reason, promise) => {
 process.on('uncaughtException', (err) => {
   logger.error(`Uncaught Exception: ${err.message}`, { stack: err.stack });
 });
+

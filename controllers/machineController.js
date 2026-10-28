@@ -1,3 +1,4 @@
+const logger = require('../utils/logger');
 const db = require('../config/db');
 const ApiResponse = require('../utils/apiResponse');
 
@@ -42,7 +43,7 @@ exports.getMachines = async (req, res, next) => {
          ORDER BY m.created_at DESC`
       );
     }
-    console.log(`[getMachines] Called by user ${req.user?.id} (${role}), returned ${result.rows.length} rows`);
+    logger.info(`[getMachines] Called by user ${req.user?.id} (${role}), returned ${result.rows.length} rows`);
     res.status(200).json(new ApiResponse(200, result.rows, 'Machines retrieved successfully'));
   } catch (error) { next(error); }
 };
@@ -107,18 +108,39 @@ exports.createMachine = async (req, res, next) => {
       water_level_trigger
     } = req.body;
 
+    const cleanName = String(name || '').trim();
+    if (!cleanName) {
+      return res.status(400).json(new ApiResponse(400, null, 'Machine Name is required'));
+    }
+
+    // Prevent duplicate machine hardware names/IDs across system
+    const dupCheck = await db.query('SELECT id FROM machines WHERE LOWER(name) = LOWER($1)', [cleanName]);
+    if (dupCheck.rows.length > 0) {
+      return res.status(400).json(new ApiResponse(400, null, `Machine with name "${cleanName}" already exists. Duplicate machine names are strictly prohibited.`));
+    }
+
     if (!ro_id) {
       return res.status(400).json(new ApiResponse(400, null, 'Please assign an RO'));
     }
 
-    // Check if the assigned RO is Inactive
-    const roCheck = await db.query('SELECT id, name, status FROM ro WHERE id = $1', [ro_id]);
+    // Role-based tenant validation to prevent IDOR
+    if (req.user?.role === 'RO Manager' && parseInt(ro_id, 10) !== parseInt(req.user.roId, 10)) {
+      return res.status(403).json(new ApiResponse(403, null, 'Not authorized to create machine for another RO'));
+    }
+
+    // Check if the assigned RO exists and belongs to caller's OMC if OMC Admin
+    const roCheck = await db.query('SELECT id, name, status, omc_id FROM ro WHERE id = $1', [ro_id]);
     if (roCheck.rows.length === 0) {
       return res.status(400).json(new ApiResponse(400, null, 'Selected RO not found'));
     }
-    const roStatus = String(roCheck.rows[0].status || '').trim().toLowerCase();
+    const targetRo = roCheck.rows[0];
+    if (req.user?.role === 'OMC Admin' && targetRo.omc_id !== req.user.omcId) {
+      return res.status(403).json(new ApiResponse(403, null, 'Not authorized to create machine for an RO belonging to another OMC'));
+    }
+
+    const roStatus = String(targetRo.status || '').trim().toLowerCase();
     if (roStatus === 'inactive') {
-      return res.status(400).json(new ApiResponse(400, null, `Cannot create machine for Inactive RO "${roCheck.rows[0].name}". Please activate the RO first.`));
+      return res.status(400).json(new ApiResponse(400, null, `Cannot create machine for Inactive RO "${targetRo.name}". Please activate the RO first.`));
     }
 
     const dateVal = install_date || created_at || new Date();

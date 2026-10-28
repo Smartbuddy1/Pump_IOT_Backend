@@ -1,8 +1,13 @@
+const ApiResponse = require('../utils/apiResponse');
+const logger = require('../utils/logger');
 const pool = require('../config/db');
 
-exports.getTelemetryHistory = async (req, res) => {
+exports.getTelemetryHistory = async (req, res, next) => {
   try {
     const { machineId, startDate, endDate } = req.query;
+    const role = req.user?.role;
+    const omcId = req.user?.omcId;
+    const roId = req.user?.roId;
 
     let query = `
       SELECT 
@@ -16,7 +21,16 @@ exports.getTelemetryHistory = async (req, res) => {
       WHERE 1=1
     `;
     const params = [];
-    
+
+    // Tenant isolation — restrict by role
+    if (role === 'RO Manager' && roId) {
+      params.push(roId);
+      query += ` AND machine_name IN (SELECT name FROM machines WHERE ro_id = $${params.length})`;
+    } else if (role === 'OMC Admin' && omcId) {
+      params.push(omcId);
+      query += ` AND machine_name IN (SELECT m.name FROM machines m JOIN ro r ON m.ro_id = r.id WHERE r.omc_id = $${params.length})`;
+    }
+
     if (machineId && machineId !== 'All') {
       params.push(machineId);
       query += ` AND machine_name = $${params.length}`;
@@ -37,12 +51,11 @@ exports.getTelemetryHistory = async (req, res) => {
     const result = await pool.query(query, params);
     res.status(200).json({ success: true, data: result.rows });
   } catch (error) {
-    console.error('Error fetching telemetry history:', error);
-    res.status(500).json({ success: false, message: 'Server error' });
+    next(error);
   }
 };
 
-exports.getDashboardStats = async (req, res) => {
+exports.getDashboardStats = async (req, res, next) => {
   try {
     const role = req.user?.role;
     const omcId = req.user?.omcId || req.query.omcId;
@@ -95,7 +108,6 @@ exports.getDashboardStats = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching dashboard stats:', error);
-    res.status(500).json({ success: false, message: 'Server error' });
+    next(error);
   }
 };

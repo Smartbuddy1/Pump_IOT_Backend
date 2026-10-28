@@ -136,14 +136,26 @@ const initDatabase = async () => {
     // Seed initial OMC & RO & Machine if empty
     const omcCheck = await db.query('SELECT COUNT(*) FROM omc');
     if (parseInt(omcCheck.rows[0].count) === 0) {
+      // Hash passwords before storing (security fix)
+      const saltSeed = await bcrypt.genSalt(10);
+      const hashedNilam = await bcrypt.hash('Nilam@123', saltSeed);
+      const hashedShital = await bcrypt.hash('Shital@123', saltSeed);
+
       const omcRes = await db.query(
-        "INSERT INTO omc (name, location, contact, contact_password, status) VALUES ('IOCL', 'Mumbai', '8767955438', 'Nilam@123', 'Active') RETURNING id"
+        "INSERT INTO omc (name, location, contact, contact_password, status) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+        ['IOCL', 'Mumbai', '8767955438', hashedNilam, 'Active']
       );
       const omcId = omcRes.rows[0].id;
 
+      // Also create OMC Admin user
+      await db.query(
+        "INSERT INTO users (username, password, role, omc_id) VALUES ($1, $2, 'OMC Admin', $3) ON CONFLICT (username) DO NOTHING",
+        ['8767955438', hashedNilam, omcId]
+      );
+
       const roRes = await db.query(
-        "INSERT INTO ro (name, omc_id, location, contact, contact_password, status) VALUES ('Mumbai Central RO', $1, 'Mumbai South', '8010209983', 'Shital@123', 'Active') RETURNING id",
-        [omcId]
+        "INSERT INTO ro (name, omc_id, location, contact, contact_password, status) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+        ['Mumbai Central RO', omcId, 'Mumbai South', '8010209983', hashedShital, 'Active']
       );
       const roId = roRes.rows[0].id;
 

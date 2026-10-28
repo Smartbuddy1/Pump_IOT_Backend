@@ -22,6 +22,28 @@ if (process.env.MQTT_USERNAME) {
 }
 
 let mqttClient = null;
+const machineMetadataCache = new Map(); // In-memory cache for fast tenant routing (1 min TTL)
+
+const getCachedMachineInfo = async (machineName) => {
+  const cacheKey = String(machineName || '').toLowerCase();
+  const cached = machineMetadataCache.get(cacheKey);
+  const now = Date.now();
+  if (cached && (now - cached.timestamp < 60000)) {
+    return cached.info;
+  }
+  try {
+    const mRes = await pool.query(
+      `SELECT m.id, m.name, m.ro_id, r.omc_id FROM machines m LEFT JOIN ro r ON m.ro_id = r.id WHERE LOWER(m.name) = LOWER($1)`,
+      [machineName]
+    );
+    const info = mRes.rows.length > 0 ? mRes.rows[0] : null;
+    machineMetadataCache.set(cacheKey, { info, timestamp: now });
+    return info;
+  } catch (dbErr) {
+    logger.error(`[MQTT] Error querying machine info: ${dbErr.message}`);
+    return cached ? cached.info : null;
+  }
+};
 
 const initMqtt = (io) => {
   logger.info(`[MQTT] Connecting to Mosquitto Broker at: ${MQTT_BROKER} (Client: ${mqttOptions.clientId})`);
@@ -63,22 +85,8 @@ const initMqtt = (io) => {
       const topicParts = topic.split('/');
       let machineIdStr = topicParts[topicParts.length - 1];
 
-      // Fetch machine metadata from DB to verify registration and get tenant routing (omc_id, ro_id)
-      let machineInfo = null;
-      try {
-        const mRes = await pool.query(
-          `SELECT m.id, m.name, m.ro_id, r.omc_id 
-           FROM machines m 
-           LEFT JOIN ro r ON m.ro_id = r.id 
-           WHERE LOWER(m.name) = LOWER($1)`,
-          [machineIdStr]
-        );
-        if (mRes.rows.length > 0) {
-          machineInfo = mRes.rows[0];
-        }
-      } catch (dbErr) {
-        logger.error(`[MQTT] Error querying machine info: ${dbErr.message}`);
-      }
+      // In-memory cached lookup for machine metadata (zero-latency tenant routing)
+      const machineInfo = await getCachedMachineInfo(machineIdStr);
 
       // ── 1. Handle LWT / Machine Status Messages ───────────────────────────
       if (topic.startsWith('petroleum/iot/status/')) {
@@ -87,8 +95,7 @@ const initMqtt = (io) => {
 
         const statusPayload = { machineId: machineIdStr, status };
         if (io) {
-          // Broadcast globally + targeted tenant rooms
-          io.emit('machine_status_update', statusPayload);
+          // Strictly route to authorized tenant rooms & Super Admin
           if (machineInfo?.omc_id) io.to(`omc_${machineInfo.omc_id}`).emit('machine_status_update', statusPayload);
           if (machineInfo?.ro_id) io.to(`ro_${machineInfo.ro_id}`).emit('machine_status_update', statusPayload);
           io.to('super_admin').emit('machine_status_update', statusPayload);
@@ -111,23 +118,37 @@ const initMqtt = (io) => {
 
       // Handle LIVE_DATA telemetry
       if (command === 'LIVE_DATA' && parts.length >= 6) {
-        const tempRaw = parts[2] ? parts[2].replace(/[^0-9.-]/g, '') : '25';
-        const temp = tempRaw + '°C';
+        // Sanity validation & clamping for sensor readings
+        let tempVal = parseFloat(parts[2]?.replace(/[^0-9.-]/g, ''));
+        if (isNaN(tempVal) || tempVal < -40 || tempVal > 100) tempVal = 28;
+        const temp = `${tempVal}°C`;
+        const tempRaw = String(tempVal);
         
         // Clean water parsing (prevent NaN from strings like 'low')
         const rawWaterStr = String(parts[3] || '').replace('%', '').trim().toLowerCase();
-        const parsedWaterNum = parseFloat(rawWaterStr);
-        const waterNumeric = !isNaN(parsedWaterNum) ? parsedWaterNum : (rawWaterStr === 'low' ? 10 : 80);
-        const waterStatus = rawWaterStr === 'low' || (!isNaN(parsedWaterNum) && parsedWaterNum <= 20) ? 'Low' : 'Normal';
+        let parsedWaterNum = parseFloat(rawWaterStr);
+        if (isNaN(parsedWaterNum)) parsedWaterNum = (rawWaterStr === 'low' ? 10 : 80);
+        parsedWaterNum = Math.max(0, Math.min(100, parsedWaterNum));
+        const waterNumeric = parsedWaterNum;
+        const waterStatus = rawWaterStr === 'low' || parsedWaterNum <= 20 ? 'Low' : 'Normal';
 
-        const humRaw = parts[4] ? parts[4].replace(/[^0-9.-]/g, '') : '50';
-        const humidity = humRaw + '%';
+        let humVal = parseFloat(parts[4]?.replace(/[^0-9.-]/g, ''));
+        if (isNaN(humVal) || humVal < 0 || humVal > 100) humVal = 50;
+        const humidity = `${humVal}%`;
+        const humRaw = String(humVal);
 
-        const odourRaw = parts[5] ? parts[5].replace(/[^0-9.-]/g, '') : '30';
-        const odour = odourRaw + ' PPM';
+        let odourVal = parseFloat(parts[5]?.replace(/[^0-9.-]/g, ''));
+        if (isNaN(odourVal) || odourVal < 0 || odourVal > 2000) odourVal = 30;
+        const odour = `${odourVal} PPM`;
+        const odourRaw = String(odourVal);
 
-        const nh3Raw = parts[6] ? parts[6].replace(/[^0-9.-]/g, '') : '0';
-        const h2sRaw = parts[7] ? parts[7].replace(/[^0-9.-]/g, '') : '0';
+        let nh3Val = parseFloat(parts[6]?.replace(/[^0-9.-]/g, ''));
+        if (isNaN(nh3Val) || nh3Val < 0 || nh3Val > 1000) nh3Val = 0;
+        const nh3Raw = String(nh3Val);
+
+        let h2sVal = parseFloat(parts[7]?.replace(/[^0-9.-]/g, ''));
+        if (isNaN(h2sVal) || h2sVal < 0 || h2sVal > 1000) h2sVal = 0;
+        const h2sRaw = String(h2sVal);
 
         // Update live machine readings
         await pool.query(
@@ -150,7 +171,7 @@ const initMqtt = (io) => {
           [machineIdStr, parseFloat(tempRaw) || 0, waterNumeric, parseFloat(humRaw) || 0, parseFloat(odourRaw) || 0]
         );
 
-        // Real-time WebSocket broadcast
+        // Real-time WebSocket broadcast strictly routed to tenant rooms
         const telemetryBroadcast = {
           machineId: machineIdStr,
           temperature: temp,
@@ -162,7 +183,6 @@ const initMqtt = (io) => {
         };
 
         if (io) {
-          io.emit('live_data_update', telemetryBroadcast);
           if (machineInfo?.omc_id) io.to(`omc_${machineInfo.omc_id}`).emit('live_data_update', telemetryBroadcast);
           if (machineInfo?.ro_id) io.to(`ro_${machineInfo.ro_id}`).emit('live_data_update', telemetryBroadcast);
           io.to('super_admin').emit('live_data_update', telemetryBroadcast);
@@ -203,7 +223,6 @@ const initMqtt = (io) => {
             };
 
             if (io) {
-              io.emit('new_alert', alertPayload);
               if (machineInfo?.omc_id) io.to(`omc_${machineInfo.omc_id}`).emit('new_alert', alertPayload);
               if (machineInfo?.ro_id) io.to(`ro_${machineInfo.ro_id}`).emit('new_alert', alertPayload);
               io.to('super_admin').emit('new_alert', alertPayload);

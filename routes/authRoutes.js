@@ -7,10 +7,10 @@ const { registerValidation, loginValidation } = require('../validators/authValid
 
 const router = express.Router();
 
-// Brute-force protection for login
+// Brute-force protection for login — max 10 attempts per 15 minutes per IP
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10000, // Relaxed limit to prevent locking during development and testing
+  max: 10,
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: 'Too many login attempts, please try again later' }

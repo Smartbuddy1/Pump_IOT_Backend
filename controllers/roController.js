@@ -1,6 +1,7 @@
 const db = require('../config/db');
 const ApiResponse = require('../utils/apiResponse');
 const bcrypt = require('bcrypt');
+const logger = require('../utils/logger');
 
 // @desc    Get all ROs
 // @route   GET /api/v1/ro
@@ -21,7 +22,7 @@ exports.getROs = async (req, res, next) => {
       // Super Admin sees all
       result = await db.query('SELECT * FROM ro ORDER BY created_at DESC');
     }
-    console.log(`[getROs] Called by user ${req.user?.id} (${role}), returned ${result.rows.length} rows`);
+    logger.info(`[getROs] Called by user ${req.user?.id} (${role}), returned ${result.rows.length} rows`);
     res.status(200).json(new ApiResponse(200, result.rows, 'ROs retrieved successfully'));
   } catch (error) { next(error); }
 };
@@ -64,26 +65,41 @@ exports.createRO = async (req, res, next) => {
       return res.status(400).json(new ApiResponse(400, null, `Phone number ${cleanContact} is already registered to an existing account. Duplicate phone number is strictly prohibited.`));
     }
     
-    // 1. Create RO
-    const result = await db.query(
-      'INSERT INTO ro (name, omc_id, location, status, contact, contact_password) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-      [name, omc_id, location, status || 'Active', cleanContact, contact_password]
-    );
-    const newRo = result.rows[0];
-
-    // 2. Generate RO Manager User
-    const rawPassword = contact_password || Math.random().toString(36).slice(-8); // Random 8 char password
+    const rawPassword = contact_password;
     const username = cleanContact;
-    
+
+    // Hash password for BOTH ro table AND users table (security fix)
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(rawPassword, salt);
 
-    await db.query(
-      'INSERT INTO users (username, password, role, omc_id, ro_id) VALUES ($1, $2, $3, $4, $5)',
-      [username, hashedPassword, 'RO Manager', omc_id, newRo.id]
-    );
+    // Use a transaction so RO + user creation are atomic
+    const client = await db.pool.connect();
+    let newRo;
+    try {
+      await client.query('BEGIN');
 
-    // 3. Return RO and Credentials
+      // 1. Create RO (store hashed password)
+      const roResult = await client.query(
+        'INSERT INTO ro (name, omc_id, location, status, contact, contact_password) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+        [name, omc_id, location, status || 'Active', cleanContact, hashedPassword]
+      );
+      newRo = roResult.rows[0];
+
+      // 2. Create RO Manager user (hashed password)
+      await client.query(
+        'INSERT INTO users (username, password, role, omc_id, ro_id) VALUES ($1, $2, $3, $4, $5)',
+        [username, hashedPassword, 'RO Manager', omc_id, newRo.id]
+      );
+
+      await client.query('COMMIT');
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      throw txErr;
+    } finally {
+      client.release();
+    }
+
+    // 3. Return RO and plain credentials (shown once only)
     res.status(201).json(new ApiResponse(201, {
       ...newRo,
       credentials: { username, password: rawPassword }
@@ -103,9 +119,6 @@ exports.updateRO = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { name, omc_id, location, status, contact, contact_password } = req.body;
-    if (!contact_password) {
-      return res.status(400).json(new ApiResponse(400, null, 'Password is required'));
-    }
 
     const cleanContact = String(contact || '').replace(/\D/g, '').trim();
     if (!cleanContact || cleanContact.length !== 10) {
@@ -126,16 +139,34 @@ exports.updateRO = async (req, res, next) => {
       return res.status(400).json(new ApiResponse(400, null, `Phone number ${cleanContact} is already registered to another account. Duplicate phone number is strictly prohibited.`));
     }
 
+    // Only hash if a new plain-text password is provided (same pattern as omcController)
+    const isNewRawPassword = contact_password &&
+      typeof contact_password === 'string' &&
+      contact_password.trim() !== '' &&
+      !contact_password.startsWith('$2a$') &&
+      !contact_password.startsWith('$2b$');
+
+    let updateFields = 'name = $1, omc_id = $2, location = $3, status = $4, contact = $5';
+    let updateParams = [name, omc_id, location, status, cleanContact];
+
+    if (isNewRawPassword) {
+      const saltForUpdate = await bcrypt.genSalt(10);
+      const hashedPwdForRo = await bcrypt.hash(contact_password.trim(), saltForUpdate);
+      updateFields += ', contact_password = $6';
+      updateParams.push(hashedPwdForRo);
+    }
+    updateParams.push(id);
+
     const result = await db.query(
-      'UPDATE ro SET name = $1, omc_id = $2, location = $3, status = $4, contact = $5, contact_password = $6 WHERE id = $7 RETURNING *',
-      [name, omc_id, location, status, cleanContact, contact_password, id]
+      `UPDATE ro SET ${updateFields} WHERE id = $${updateParams.length} RETURNING *`,
+      updateParams
     );
     if (result.rows.length === 0) return res.status(404).json(new ApiResponse(404, null, 'RO not found'));
 
-    // Update the RO Manager user
-    if (contact_password) {
+    // Update the RO Manager user — only update password if new raw password given
+    if (isNewRawPassword) {
       const salt = await bcrypt.genSalt(10);
-      const hashedPassword = await bcrypt.hash(contact_password, salt);
+      const hashedPassword = await bcrypt.hash(contact_password.trim(), salt);
       await db.query(
         'UPDATE users SET password = $1, username = $2 WHERE ro_id = $3 AND role = $4',
         [hashedPassword, cleanContact, id, 'RO Manager']
