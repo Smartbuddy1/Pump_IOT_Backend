@@ -42,6 +42,8 @@ async function startSimulator() {
         const water = (Math.random() * (90 - 40) + 40).toFixed(1); // 40 to 90% (normal)
         const humidity = (Math.random() * (60 - 40) + 40).toFixed(1); // 40 to 60% (normal)
         const odour = (Math.random() * (25 - 5) + 5).toFixed(1); // 5 to 25 PPM (clean)
+        const nh3 = (Math.random() * (15 - 2) + 2).toFixed(1); // 2 to 15 PPM
+        const h2s = (Math.random() * (10 - 1) + 1).toFixed(1); // 1 to 10 PPM
 
         const topic = `petroleum/iot/telemetry/${mName}`;
         const payload = `${mName},LIVE_DATA,${temp},${water},${humidity},${odour}`;
