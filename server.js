@@ -196,7 +196,11 @@ app.use('/api/v1/alerts', alertRoutes);
 app.use('/api/v1/analytics', analyticsRoutes);
 app.use('/api/v1/feedback', feedbackRoutes);
 
-// Health Check Route
+// Root & Health Check Routes
+app.get('/', (req, res) => {
+  res.status(200).json({ success: true, message: 'Petroleum IoT Backend API is running smoothly! 🚀' });
+});
+
 app.get('/api/health', (req, res) => {
   res.status(200).json({ success: true, message: 'Backend is running smoothly! 🚀' });
 });
