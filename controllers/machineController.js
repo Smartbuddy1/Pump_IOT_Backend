@@ -124,8 +124,8 @@ exports.createMachine = async (req, res, next) => {
     }
 
     // Role-based tenant validation to prevent IDOR
-    if (req.user?.role === 'RO Manager' && parseInt(ro_id, 10) !== parseInt(req.user.roId, 10)) {
-      return res.status(403).json(new ApiResponse(403, null, 'Not authorized to create machine for another RO'));
+    if (req.user?.role === 'RO Manager') {
+      return res.status(403).json(new ApiResponse(403, null, 'RO Managers have Read-Only access and cannot register machines'));
     }
 
     // Check if the assigned RO exists and belongs to caller's OMC if OMC Admin
@@ -278,8 +278,8 @@ exports.updateMachine = async (req, res, next) => {
     }
     const existingMachine = existingMachineRes.rows[0];
 
-    if (req.user?.role === 'RO Manager' && existingMachine.ro_id !== req.user.roId) {
-      return res.status(403).json(new ApiResponse(403, null, 'Not authorized to update machine belonging to another RO'));
+    if (req.user?.role === 'RO Manager') {
+      return res.status(403).json(new ApiResponse(403, null, 'RO Managers have Read-Only access and cannot update machines'));
     }
     if (req.user?.role === 'OMC Admin' && existingMachine.omc_id !== req.user.omcId) {
       return res.status(403).json(new ApiResponse(403, null, 'Not authorized to update machine belonging to another OMC'));
@@ -391,8 +391,8 @@ exports.deleteMachine = async (req, res, next) => {
     const machine = machineCheck.rows[0];
 
     // 2. Tenant isolation check
-    if (req.user?.role === 'RO Manager' && machine.ro_id !== req.user.roId) {
-      return res.status(403).json(new ApiResponse(403, null, 'Not authorized to delete machine belonging to another RO'));
+    if (req.user?.role === 'RO Manager') {
+      return res.status(403).json(new ApiResponse(403, null, 'RO Managers have Read-Only access and cannot delete machines'));
     }
     if (req.user?.role === 'OMC Admin' && machine.omc_id !== req.user.omcId) {
       return res.status(403).json(new ApiResponse(403, null, 'Not authorized to delete machine belonging to another OMC'));
