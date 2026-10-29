@@ -20,7 +20,7 @@ exports.getOMCs = async (req, res, next) => {
       result = await db.query(`SELECT ${safeFields} FROM omc WHERE id = $1`, [omcId]);
     } else {
       // Super Admin sees all
-      result = await db.query(`SELECT ${safeFields} FROM omc ORDER BY created_at DESC`);
+      result = await db.query(`SELECT ${safeFields} FROM omc ORDER BY LOWER(name) ASC`);
     }
     logger.info(`[getOMCs] Called by user ${req.user?.id} (${role}), returned ${result.rows.length} rows`);
     res.status(200).json(new ApiResponse(200, result.rows, 'OMCs retrieved successfully'));
@@ -39,8 +39,8 @@ exports.createOMC = async (req, res, next) => {
     if (!location || !String(location).trim()) {
       return res.status(400).json(new ApiResponse(400, null, 'Location is required'));
     }
-    if (!contact_password) {
-      return res.status(400).json(new ApiResponse(400, null, 'Password is required'));
+    if (!contact_password || String(contact_password).trim().length < 8) {
+      return res.status(400).json(new ApiResponse(400, null, 'Password must be at least 8 characters long'));
     }
 
     const cleanContact = String(contact || '').replace(/\D/g, '').trim();
@@ -151,6 +151,10 @@ exports.updateOMC = async (req, res, next) => {
       contact_password.trim() !== '' && 
       !contact_password.startsWith('$2a$') && 
       !contact_password.startsWith('$2b$');
+
+    if (isNewRawPassword && contact_password.trim().length < 8) {
+      return res.status(400).json(new ApiResponse(400, null, 'Password must be at least 8 characters long'));
+    }
 
     let updateFields = 'name = $1, location = $2, contact = $3';
     let updateParams = [name, location, cleanContact];

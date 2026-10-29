@@ -53,7 +53,7 @@ const initDatabase = async () => {
         name VARCHAR(255) NOT NULL,
         ro_id INTEGER REFERENCES ro(id) ON DELETE CASCADE,
         type VARCHAR(100),
-        status VARCHAR(50) DEFAULT 'Running',
+        status VARCHAR(50) DEFAULT 'Inactive',
         health_score INTEGER DEFAULT 100,
         live_temp VARCHAR(50) DEFAULT '0',
         live_water VARCHAR(50) DEFAULT '0',

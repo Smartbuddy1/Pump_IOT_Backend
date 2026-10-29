@@ -52,7 +52,16 @@ const corsOriginChecker = (origin, callback) => {
   if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
   try {
     const url = new URL(origin);
-    if (url.hostname === 'aaryainnovtech.com' || url.hostname === '13.232.110.133' || url.hostname.endsWith('.aaryainnovtech.com')) {
+    if (
+      url.hostname === 'aaryainnovtech.com' || 
+      url.hostname === '13.232.110.133' || 
+      url.hostname.endsWith('.aaryainnovtech.com') ||
+      url.hostname === 'localhost' ||
+      url.hostname === '127.0.0.1' ||
+      url.hostname.startsWith('192.168.') ||
+      url.hostname.startsWith('10.') ||
+      /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(url.hostname)
+    ) {
       return callback(null, true);
     }
   } catch (e) {}

@@ -15,7 +15,7 @@ exports.getMachines = async (req, res, next) => {
       // RO Manager sees only their own RO's machines
       result = await db.query(
         `SELECT m.*, r.status AS ro_status, r.name AS ro_name,
-           CASE WHEN LOWER(COALESCE(r.status, '')) = 'inactive' THEN 'Inactive' ELSE m.status END AS status
+           CASE WHEN LOWER(COALESCE(r.status, '')) = 'inactive' THEN 'Inactive' ELSE COALESCE(m.status, 'Inactive') END AS status
          FROM machines m
          LEFT JOIN ro r ON m.ro_id = r.id
          WHERE m.ro_id = $1
@@ -26,7 +26,7 @@ exports.getMachines = async (req, res, next) => {
       // OMC Admin sees all machines under their OMC's ROs
       result = await db.query(
         `SELECT m.*, r.status AS ro_status, r.name AS ro_name,
-           CASE WHEN LOWER(COALESCE(r.status, '')) = 'inactive' THEN 'Inactive' ELSE m.status END AS status
+           CASE WHEN LOWER(COALESCE(r.status, '')) = 'inactive' THEN 'Inactive' ELSE COALESCE(m.status, 'Inactive') END AS status
          FROM machines m
          JOIN ro r ON m.ro_id = r.id
          WHERE r.omc_id = $1
@@ -37,7 +37,7 @@ exports.getMachines = async (req, res, next) => {
       // Super Admin sees all
       result = await db.query(
         `SELECT m.*, r.status AS ro_status, r.name AS ro_name,
-           CASE WHEN LOWER(COALESCE(r.status, '')) = 'inactive' THEN 'Inactive' ELSE m.status END AS status
+           CASE WHEN LOWER(COALESCE(r.status, '')) = 'inactive' THEN 'Inactive' ELSE COALESCE(m.status, 'Inactive') END AS status
          FROM machines m
          LEFT JOIN ro r ON m.ro_id = r.id
          ORDER BY m.created_at DESC`
@@ -169,7 +169,7 @@ exports.createMachine = async (req, res, next) => {
     const wTrig = String(water_level_trigger || waterLevelTrigger || 'Low');
     const healthVal = health_score !== undefined && health_score !== null ? health_score : 100;
     const maintVal = last_maintenance || null;
-    const statusVal = status || 'Running';
+    const statusVal = status || 'Inactive';
     const typeVal = type || 'Dispenser';
 
     const result = await db.query(
@@ -285,6 +285,13 @@ exports.updateMachine = async (req, res, next) => {
       return res.status(403).json(new ApiResponse(403, null, 'Not authorized to update machine belonging to another OMC'));
     }
 
+    if (targetName) {
+      const dupCheck = await db.query('SELECT id FROM machines WHERE LOWER(name) = LOWER($1) AND id != $2', [targetName, existingMachine.id]);
+      if (dupCheck.rows.length > 0) {
+        return res.status(400).json(new ApiResponse(400, null, `Machine with name "${targetName}" already exists for another machine. Duplicate machine names are strictly prohibited.`));
+      }
+    }
+
     const dateVal = install_date || created_at || null;
     const tempVal = String(live_temp || liveTemp || '28').replace(/[^0-9.-]/g, '') || '28';
     const waterVal = String(live_water || liveWater || 'Normal').trim();
@@ -310,7 +317,7 @@ exports.updateMachine = async (req, res, next) => {
     const wTrig = String(water_level_trigger || waterLevelTrigger || 'Low');
     const healthVal = health_score !== undefined && health_score !== null ? health_score : 100;
     const maintVal = last_maintenance || null;
-    const statusVal = status || 'Running';
+    const statusVal = status || 'Inactive';
     const typeVal = type || 'Dispenser';
 
     const fields = [

@@ -91,8 +91,9 @@ const initMqtt = (io) => {
 
       // ── 1. Handle LWT / Machine Status Messages ───────────────────────────
       if (topic.startsWith('petroleum/iot/status/')) {
-        const status = payload.toUpperCase() === 'OFFLINE' ? 'Offline' : 'Running';
-        await pool.query('UPDATE machines SET status = $1 WHERE LOWER(name) = LOWER($2)', [status, machineIdStr]);
+        const isOffline = payload.toUpperCase() === 'OFFLINE' || payload.toUpperCase() === 'INACTIVE';
+        const status = isOffline ? 'Inactive' : 'Active';
+        await pool.query('UPDATE machines SET status = $1, last_seen = CURRENT_TIMESTAMP WHERE LOWER(name) = LOWER($2)', [status, machineIdStr]);
 
         const statusPayload = { machineId: machineIdStr, status };
         if (io) {
@@ -160,7 +161,8 @@ const initMqtt = (io) => {
                live_odour = $4,
                live_nh3 = COALESCE($5, live_nh3),
                live_h2s = COALESCE($6, live_h2s),
-               status = 'Running'
+               status = 'Active',
+               last_seen = CURRENT_TIMESTAMP
            WHERE LOWER(name) = LOWER($7)`,
           [temp, waterStatus, humidity, odour, nh3Raw, h2sRaw, machineIdStr]
         );
@@ -187,6 +189,10 @@ const initMqtt = (io) => {
           if (machineInfo?.omc_id) io.to(`omc_${machineInfo.omc_id}`).emit('live_data_update', telemetryBroadcast);
           if (machineInfo?.ro_id) io.to(`ro_${machineInfo.ro_id}`).emit('live_data_update', telemetryBroadcast);
           io.to('super_admin').emit('live_data_update', telemetryBroadcast);
+          const statusPayload = { machineId: machineIdStr, status: 'Active' };
+          if (machineInfo?.omc_id) io.to(`omc_${machineInfo.omc_id}`).emit('machine_status_update', statusPayload);
+          if (machineInfo?.ro_id) io.to(`ro_${machineInfo.ro_id}`).emit('machine_status_update', statusPayload);
+          io.to('super_admin').emit('machine_status_update', statusPayload);
         }
 
         logger.info(`[MQTT Processed] Telemetry updated for ${machineIdStr}`);

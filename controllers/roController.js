@@ -17,10 +17,10 @@ exports.getROs = async (req, res, next) => {
       result = await db.query('SELECT * FROM ro WHERE id = $1', [roId]);
     } else if (role === 'OMC Admin' && omcId) {
       // OMC Admin sees all ROs under their OMC
-      result = await db.query('SELECT * FROM ro WHERE omc_id = $1 ORDER BY created_at DESC', [omcId]);
+      result = await db.query('SELECT * FROM ro WHERE omc_id = $1 ORDER BY LOWER(name) ASC', [omcId]);
     } else {
       // Super Admin sees all
-      result = await db.query('SELECT * FROM ro ORDER BY created_at DESC');
+      result = await db.query('SELECT * FROM ro ORDER BY LOWER(name) ASC');
     }
     logger.info(`[getROs] Called by user ${req.user?.id} (${role}), returned ${result.rows.length} rows`);
     res.status(200).json(new ApiResponse(200, result.rows, 'ROs retrieved successfully'));
@@ -47,8 +47,8 @@ exports.createRO = async (req, res, next) => {
     if (!location || !String(location).trim()) {
       return res.status(400).json(new ApiResponse(400, null, 'Location is required'));
     }
-    if (!contact_password) {
-      return res.status(400).json(new ApiResponse(400, null, 'Password is required'));
+    if (!contact_password || String(contact_password).trim().length < 8) {
+      return res.status(400).json(new ApiResponse(400, null, 'Password must be at least 8 characters long'));
     }
 
     const cleanContact = String(contact || '').replace(/\D/g, '').trim();
@@ -164,6 +164,10 @@ exports.updateRO = async (req, res, next) => {
       contact_password.trim() !== '' &&
       !contact_password.startsWith('$2a$') &&
       !contact_password.startsWith('$2b$');
+
+    if (isNewRawPassword && contact_password.trim().length < 8) {
+      return res.status(400).json(new ApiResponse(400, null, 'Password must be at least 8 characters long'));
+    }
 
     let updateFields = 'name = $1, omc_id = $2, location = $3, status = $4, contact = $5';
     let updateParams = [name, omc_id, location, status, cleanContact];
