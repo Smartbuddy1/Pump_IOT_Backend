@@ -188,12 +188,45 @@ const initMqtt = (io) => {
         } else {
           // If parts[1] is LIVE_DATA, data starts at index 2. If parts[0] is LIVE_DATA, data starts at index 1.
           const offset = (parts[1] === 'LIVE_DATA') ? 2 : 1;
-          rawTemp = parts[offset];
-          rawWater = parts[offset + 1];
-          rawHum = parts[offset + 2];
-          rawOdour = parts[offset + 3];
-          rawNh3 = parts[offset + 4];
-          rawH2s = parts[offset + 5];
+          const dataParts = parts.slice(offset);
+
+          if (dataParts.length === 5) {
+            // E.g.: SBE20001,LIVE_DATA,27,45,3,1,5
+            // dataParts[0] = 27 (Temperature: 27°C)
+            // dataParts[1] = 45 (Humidity: 45%)
+            // dataParts[2] = 3  (NH3: 3 PPM)
+            // dataParts[3] = 1  (H2S: 1 PPM)
+            // dataParts[4] = 5  (Odour: 5 PPM)
+            rawTemp = dataParts[0];
+            rawHum = dataParts[1];
+            rawNh3 = dataParts[2];
+            rawH2s = dataParts[3];
+            rawOdour = dataParts[4];
+            rawWater = 'Normal';
+          } else if (dataParts.length >= 6) {
+            // E.g.: SBP2T101,LIVE_DATA,28,85,55,30,12,8
+            rawTemp = dataParts[0];
+            rawWater = dataParts[1];
+            rawHum = dataParts[2];
+            rawOdour = dataParts[3];
+            rawNh3 = dataParts[4];
+            rawH2s = dataParts[5];
+          } else if (dataParts.length === 4) {
+            // E.g.: SBP2T101,LIVE_DATA,27,80,45,15
+            rawTemp = dataParts[0];
+            rawWater = dataParts[1];
+            rawHum = dataParts[2];
+            rawOdour = dataParts[3];
+            rawNh3 = '0';
+            rawH2s = '0';
+          } else {
+            rawTemp = dataParts[0];
+            rawWater = dataParts[1] || 'Normal';
+            rawHum = dataParts[2] || '50';
+            rawOdour = dataParts[3] || '30';
+            rawNh3 = dataParts[4] || '0';
+            rawH2s = dataParts[5] || '0';
+          }
         }
 
         // Sanity validation & clamping for sensor readings
@@ -229,7 +262,7 @@ const initMqtt = (io) => {
         const h2sRaw = String(h2sVal);
 
         // Update live machine readings in database
-        await pool.query(
+        const updateRes = await pool.query(
           `UPDATE machines 
            SET live_temp = $1, 
                live_water = $2, 
@@ -242,6 +275,20 @@ const initMqtt = (io) => {
            WHERE LOWER(name) = LOWER($7)`,
           [temp, waterStatus, humidity, odour, nh3Raw, h2sRaw, machineIdStr]
         );
+
+        // If machine does not exist in DB yet, auto-register it to default RO so live telemetry is never lost!
+        if (updateRes.rowCount === 0) {
+          const defaultRoRes = await pool.query('SELECT id FROM ro ORDER BY id ASC LIMIT 1');
+          const defaultRoId = defaultRoRes.rows[0]?.id || 1;
+          await pool.query(
+            `INSERT INTO machines (name, ro_id, type, status, live_temp, live_water, live_humidity, live_odour, live_nh3, live_h2s, last_seen)
+             VALUES ($1, $2, 'Dispenser', 'Active', $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)`,
+            [machineIdStr, defaultRoId, temp, waterStatus, humidity, odour, nh3Raw, h2sRaw]
+          );
+          logger.info(`[MQTT Auto-Register] Machine ${machineIdStr} auto-registered under RO ${defaultRoId} with live telemetry!`);
+          machineMetadataCache.delete(machineIdStr.toLowerCase());
+          machineInfo = await getCachedMachineInfo(machineIdStr);
+        }
 
         // Insert into telemetry_history for analytics & graphs
         await pool.query(
