@@ -139,8 +139,33 @@ io.on('connection', (socket) => {
   }
 
   // Prevent client from spoofing tenant rooms; verify against authenticated socket.user
-  socket.on('join_tenant', () => {
-    if (!socket.user) {
+  socket.on('join_tenant', async (clientAuth) => {
+    let currentUser = socket.user;
+    const token = clientAuth?.token || socket.handshake?.auth?.token;
+    if (!currentUser && token) {
+      try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const userResult = await db.query(
+          'SELECT id, username, role, omc_id, ro_id FROM users WHERE id = $1',
+          [decoded.id]
+        );
+        if (userResult.rows.length > 0) {
+          const u = userResult.rows[0];
+          currentUser = {
+            id: u.id,
+            username: u.username,
+            role: u.role,
+            omcId: u.omc_id,
+            roId: u.ro_id
+          };
+          socket.user = currentUser;
+        }
+      } catch (err) {
+        logger.warn(`join_tenant token verification failed: ${err.message}`);
+      }
+    }
+
+    if (!currentUser) {
       logger.warn(`Unauthenticated socket ${socket.id} attempted to join_tenant. Ignored.`);
       return;
     }

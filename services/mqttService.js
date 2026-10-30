@@ -36,11 +36,19 @@ const getCachedMachineInfo = async (machineName) => {
   }
   try {
     const mRes = await pool.query(
-      `SELECT m.id, m.name, m.ro_id, r.omc_id FROM machines m LEFT JOIN ro r ON m.ro_id = r.id WHERE LOWER(m.name) = LOWER($1)`,
+      `SELECT m.id, m.name, m.ro_id, r.omc_id 
+       FROM machines m 
+       LEFT JOIN ro r ON m.ro_id = r.id 
+       WHERE LOWER(m.name) = LOWER($1) 
+          OR REPLACE(LOWER(m.name), 'o', '0') = REPLACE(LOWER($1), 'o', '0')
+       LIMIT 1`,
       [cacheKey]
     );
     const info = mRes.rows.length > 0 ? mRes.rows[0] : null;
     machineMetadataCache.set(cacheKey, { info, timestamp: now });
+    if (info && info.name) {
+      machineMetadataCache.set(info.name.toLowerCase().trim(), { info, timestamp: now });
+    }
     return info;
   } catch (dbErr) {
     logger.error(`[MQTT] Error querying machine info: ${dbErr.message}`);
@@ -163,6 +171,7 @@ const initMqtt = (io) => {
           if (machineInfo?.omc_id) io.to(`omc_${machineInfo.omc_id}`).emit('machine_status_update', statusPayload);
           if (machineInfo?.ro_id) io.to(`ro_${machineInfo.ro_id}`).emit('machine_status_update', statusPayload);
           io.to('super_admin').emit('machine_status_update', statusPayload);
+          io.emit('machine_status_update', statusPayload);
         }
         logger.info(`[MQTT Status] Machine ${machineIdStr} is now ${status}`);
         return;
@@ -180,9 +189,9 @@ const initMqtt = (io) => {
 
         if (isLiveJson) {
           rawTemp = parsedJson.temperature ?? parsedJson.temp ?? parsedJson.live_temp ?? '28';
-          rawWater = parsedJson.water ?? parsedJson.water_level ?? parsedJson.live_water ?? '80';
+          rawWater = parsedJson.water ?? parsedJson.water_level ?? parsedJson.live_water ?? 'Normal';
           rawHum = parsedJson.humidity ?? parsedJson.hum ?? parsedJson.live_humidity ?? '50';
-          rawOdour = parsedJson.odour ?? parsedJson.odor ?? parsedJson.live_odour ?? '30';
+          rawOdour = parsedJson.voc ?? parsedJson.voc_gas ?? parsedJson.odour ?? parsedJson.odor ?? parsedJson.live_odour ?? '40';
           rawNh3 = parsedJson.nh3 ?? parsedJson.live_nh3 ?? '0';
           rawH2s = parsedJson.h2s ?? parsedJson.live_h2s ?? '0';
         } else {
@@ -191,20 +200,21 @@ const initMqtt = (io) => {
           const dataParts = parts.slice(offset);
 
           if (dataParts.length === 5) {
-            // E.g.: SBE20001,LIVE_DATA,27,45,3,1,5
-            // dataParts[0] = 27 (Temperature: 27°C)
-            // dataParts[1] = 45 (Humidity: 45%)
-            // dataParts[2] = 3  (NH3: 3 PPM)
-            // dataParts[3] = 1  (H2S: 1 PPM)
-            // dataParts[4] = 5  (Odour: 5 PPM)
+            // Hardware format from petroleum topic: MachineID,LIVE_DATA,temp,hum,voc,nh3,h2s
+            // E.g.: SBE2O001,LIVE_DATA,33,55,1231,627,1379
+            // dataParts[0] = 33   (Temperature: 33°C)
+            // dataParts[1] = 55   (Humidity: 55%)
+            // dataParts[2] = 1231 (VOC Gas / Odour: 1231 PPM)
+            // dataParts[3] = 627  (NH3: 627 PPM)
+            // dataParts[4] = 1379 (H2S: 1379 PPM)
             rawTemp = dataParts[0];
             rawHum = dataParts[1];
-            rawNh3 = dataParts[2];
-            rawH2s = dataParts[3];
-            rawOdour = dataParts[4];
+            rawOdour = dataParts[2];
+            rawNh3 = dataParts[3];
+            rawH2s = dataParts[4];
             rawWater = 'Normal';
           } else if (dataParts.length >= 6) {
-            // E.g.: SBP2T101,LIVE_DATA,28,85,55,30,12,8
+            // E.g. with water: SBP2T101,LIVE_DATA,28,Normal,55,1231,627,1379 or SBP2T101,LIVE_DATA,28,85,55,30,12,8
             rawTemp = dataParts[0];
             rawWater = dataParts[1];
             rawHum = dataParts[2];
@@ -223,7 +233,7 @@ const initMqtt = (io) => {
             rawTemp = dataParts[0];
             rawWater = dataParts[1] || 'Normal';
             rawHum = dataParts[2] || '50';
-            rawOdour = dataParts[3] || '30';
+            rawOdour = dataParts[3] || '40';
             rawNh3 = dataParts[4] || '0';
             rawH2s = dataParts[5] || '0';
           }
@@ -249,16 +259,19 @@ const initMqtt = (io) => {
         const humRaw = String(humVal);
 
         let odourVal = parseFloat(String(rawOdour || '').replace(/[^0-9.-]/g, ''));
-        if (isNaN(odourVal) || odourVal < 0 || odourVal > 2000) odourVal = 30;
+        if (isNaN(odourVal) || odourVal < 0) odourVal = 40;
+        if (odourVal > 100000) odourVal = 100000;
         const odour = `${odourVal} PPM`;
         const odourRaw = String(odourVal);
 
         let nh3Val = parseFloat(String(rawNh3 || '').replace(/[^0-9.-]/g, ''));
-        if (isNaN(nh3Val) || nh3Val < 0 || nh3Val > 1000) nh3Val = 0;
+        if (isNaN(nh3Val) || nh3Val < 0) nh3Val = 0;
+        if (nh3Val > 100000) nh3Val = 100000;
         const nh3Raw = String(nh3Val);
 
         let h2sVal = parseFloat(String(rawH2s || '').replace(/[^0-9.-]/g, ''));
-        if (isNaN(h2sVal) || h2sVal < 0 || h2sVal > 1000) h2sVal = 0;
+        if (isNaN(h2sVal) || h2sVal < 0) h2sVal = 0;
+        if (h2sVal > 100000) h2sVal = 100000;
         const h2sRaw = String(h2sVal);
 
         // Update live machine readings in database
@@ -272,7 +285,8 @@ const initMqtt = (io) => {
                live_h2s = COALESCE($6, live_h2s),
                status = 'Active',
                last_seen = CURRENT_TIMESTAMP
-           WHERE LOWER(name) = LOWER($7)`,
+           WHERE LOWER(name) = LOWER($7) 
+              OR REPLACE(LOWER(name), 'o', '0') = REPLACE(LOWER($7), 'o', '0')`,
           [temp, waterStatus, humidity, odour, nh3Raw, h2sRaw, machineIdStr]
         );
 
@@ -290,16 +304,27 @@ const initMqtt = (io) => {
           machineInfo = await getCachedMachineInfo(machineIdStr);
         }
 
+        const canonicalId = machineInfo?.name || machineIdStr;
+
         // Insert into telemetry_history for analytics & graphs
-        await pool.query(
-          `INSERT INTO telemetry_history (machine_name, temperature, water, humidity, odour) 
-           VALUES ($1, $2, $3, $4, $5)`,
-          [machineIdStr, parseFloat(tempRaw) || 0, waterNumeric, parseFloat(humRaw) || 0, parseFloat(odourRaw) || 0]
-        );
+        try {
+          await pool.query(
+            `INSERT INTO telemetry_history (machine_name, temperature, water, humidity, odour, nh3, h2s) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [canonicalId, parseFloat(tempRaw) || 0, waterNumeric, parseFloat(humRaw) || 0, parseFloat(odourRaw) || 0, parseFloat(nh3Raw) || 0, parseFloat(h2sRaw) || 0]
+          );
+        } catch (histErr) {
+          await pool.query(
+            `INSERT INTO telemetry_history (machine_name, temperature, water, humidity, odour) 
+             VALUES ($1, $2, $3, $4, $5)`,
+            [canonicalId, parseFloat(tempRaw) || 0, waterNumeric, parseFloat(humRaw) || 0, parseFloat(odourRaw) || 0]
+          );
+        }
 
         // Real-time WebSocket broadcast strictly routed to tenant rooms
         const telemetryBroadcast = {
-          machineId: machineIdStr,
+          machineId: canonicalId,
+          rawMachineId: machineIdStr,
           temperature: temp,
           water: waterStatus,
           humidity: humidity,
@@ -312,10 +337,13 @@ const initMqtt = (io) => {
           if (machineInfo?.omc_id) io.to(`omc_${machineInfo.omc_id}`).emit('live_data_update', telemetryBroadcast);
           if (machineInfo?.ro_id) io.to(`ro_${machineInfo.ro_id}`).emit('live_data_update', telemetryBroadcast);
           io.to('super_admin').emit('live_data_update', telemetryBroadcast);
-          const statusPayload = { machineId: machineIdStr, status: 'Active' };
+          io.emit('live_data_update', telemetryBroadcast);
+
+          const statusPayload = { machineId: canonicalId, status: 'Active' };
           if (machineInfo?.omc_id) io.to(`omc_${machineInfo.omc_id}`).emit('machine_status_update', statusPayload);
           if (machineInfo?.ro_id) io.to(`ro_${machineInfo.ro_id}`).emit('machine_status_update', statusPayload);
           io.to('super_admin').emit('machine_status_update', statusPayload);
+          io.emit('machine_status_update', statusPayload);
         }
 
         logger.info(`[MQTT Processed] Telemetry updated for ${machineIdStr} (Topic: ${topic})`);
@@ -411,6 +439,7 @@ const initMqtt = (io) => {
               if (machineInfo?.omc_id) io.to(`omc_${machineInfo.omc_id}`).emit('new_alert', alertPayload);
               if (machineInfo?.ro_id) io.to(`ro_${machineInfo.ro_id}`).emit('new_alert', alertPayload);
               io.to('super_admin').emit('new_alert', alertPayload);
+              io.emit('new_alert', alertPayload);
             }
 
             logger.info(`[MQTT Alert Created] ${machineIdStr}: ${alertMsg} (${severity})`);
