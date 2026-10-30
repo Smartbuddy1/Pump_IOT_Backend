@@ -2,7 +2,8 @@ const mqtt = require('mqtt');
 require('dotenv').config();
 const pool = require('./config/db');
 
-const MQTT_BROKER = process.env.MQTT_BROKER || 'mqtt://broker.hivemq.com';
+const MQTT_BROKER = process.env.MQTT_BROKER || 'mqtt://13.232.110.133:1883';
+const MAIN_TOPIC = process.env.MQTT_TOPIC || 'petroleum';
 
 async function startSimulator() {
   console.log(`Connecting to MQTT Broker: ${MQTT_BROKER}...`);
@@ -29,13 +30,15 @@ async function startSimulator() {
 
   client.on('connect', () => {
     console.log(`Simulation Started for machines: [${machineNames.join(', ')}]! Connected to Broker 🚀`);
+    console.log(`Publishing all telemetry & alerts to unified topic: '${MAIN_TOPIC}'`);
 
     // Set machines status to Running
     machineNames.forEach(mName => {
+      client.publish(MAIN_TOPIC, `${mName},Running`);
       client.publish(`petroleum/iot/status/${mName}`, 'Running');
     });
 
-    // Publish LIVE_DATA every 3 seconds for active machines
+    // Publish LIVE_DATA every 4 seconds for active machines
     setInterval(() => {
       machineNames.forEach(mName => {
         const temp = (Math.random() * (35 - 24) + 24).toFixed(1); // 24 to 35 C (normal)
@@ -45,12 +48,15 @@ async function startSimulator() {
         const nh3 = (Math.random() * (15 - 2) + 2).toFixed(1); // 2 to 15 PPM
         const h2s = (Math.random() * (10 - 1) + 1).toFixed(1); // 1 to 10 PPM
 
-        const topic = `petroleum/iot/telemetry/${mName}`;
-        const payload = `${mName},LIVE_DATA,${temp},${water},${humidity},${odour}`;
+        const payload = `${mName},LIVE_DATA,${temp},${water},${humidity},${odour},${nh3},${h2s}`;
 
-        client.publish(topic, payload, () => {
-          console.log(`Published: [${topic}] ${payload}`);
+        // 1. Publish to unified topic 'petroleum'
+        client.publish(MAIN_TOPIC, payload, () => {
+          console.log(`Published [${MAIN_TOPIC}]: ${payload}`);
         });
+
+        // 2. Also publish to legacy topic
+        client.publish(`petroleum/iot/telemetry/${mName}`, payload);
       });
     }, 4000);
 
@@ -60,11 +66,10 @@ async function startSimulator() {
       const mName = machineNames[Math.floor(Math.random() * machineNames.length)];
       const alertTypes = ['Water Level Low - Refill required', 'High Temperature Detected'];
       const randomAlert = alertTypes[Math.floor(Math.random() * alertTypes.length)];
-      const topic = `petroleum/iot/telemetry/${mName}`;
       const payload = `${mName},ALERT,${randomAlert}`;
 
-      client.publish(topic, payload, () => {
-        console.log(`Published ALERT: [${topic}] ${payload}`);
+      client.publish(MAIN_TOPIC, payload, () => {
+        console.log(`Published ALERT [${MAIN_TOPIC}]: ${payload}`);
       });
     }, 30000);
   });
