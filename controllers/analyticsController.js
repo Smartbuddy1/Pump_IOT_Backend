@@ -118,7 +118,7 @@ exports.getDashboardStats = async (req, res, next) => {
 // @access  Private
 exports.getLiveReadings = async (req, res, next) => {
   try {
-    const { machineId, limit = 150 } = req.query;
+    const { machineId, limit = 1000, days = 2 } = req.query;
     const role = req.user?.role;
     const omcId = req.user?.omcId;
     const roId = req.user?.roId;
@@ -127,17 +127,17 @@ exports.getLiveReadings = async (req, res, next) => {
       SELECT 
         th.id,
         th.machine_name as "machineId",
-        th.temperature as "temp",
-        th.humidity as "humidity",
-        th.odour as "vocGas",
-        th.nh3 as "nh3",
-        th.h2s as "h2s",
-        th.water as "water",
+        COALESCE(th.temperature, 0) as "temp",
+        COALESCE(th.humidity, 0) as "humidity",
+        COALESCE(th.odour, 0) as "vocGas",
+        COALESCE(th.nh3, 0) as "nh3",
+        COALESCE(th.h2s, 0) as "h2s",
+        COALESCE(th.water, 0) as "water",
         th.created_at as "timestamp"
       FROM telemetry_history th
-      WHERE 1=1
+      WHERE th.created_at >= NOW() - (INTERVAL '1 day' * $1)
     `;
-    const params = [];
+    const params = [parseInt(days, 10) || 2];
 
     if (role === 'RO Manager' && roId) {
       params.push(roId);
@@ -152,7 +152,7 @@ exports.getLiveReadings = async (req, res, next) => {
       query += ` AND (LOWER(th.machine_name) = LOWER($${params.length}) OR REPLACE(LOWER(th.machine_name), 'o', '0') = REPLACE(LOWER($${params.length}), 'o', '0'))`;
     }
 
-    const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 150, 10), 1000);
+    const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 1000, 10), 3000);
     params.push(safeLimit);
     query += ` ORDER BY th.created_at DESC LIMIT $${params.length}`;
 
