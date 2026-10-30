@@ -330,7 +330,8 @@ const initMqtt = (io) => {
           humidity: humidity,
           odour: odour,
           nh3: nh3Raw,
-          h2s: h2sRaw
+          h2s: h2sRaw,
+          timestamp: new Date().toISOString()
         };
 
         if (io) {
@@ -338,6 +339,7 @@ const initMqtt = (io) => {
           if (machineInfo?.ro_id) io.to(`ro_${machineInfo.ro_id}`).emit('live_data_update', telemetryBroadcast);
           io.to('super_admin').emit('live_data_update', telemetryBroadcast);
           io.emit('live_data_update', telemetryBroadcast);
+          io.emit('new_reading', telemetryBroadcast);
 
           const statusPayload = { machineId: canonicalId, status: 'Active' };
           if (machineInfo?.omc_id) io.to(`omc_${machineInfo.omc_id}`).emit('machine_status_update', statusPayload);

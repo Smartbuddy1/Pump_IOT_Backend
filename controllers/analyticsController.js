@@ -111,3 +111,54 @@ exports.getDashboardStats = async (req, res, next) => {
     next(error);
   }
 };
+
+
+// @desc    Get raw PCB telemetry readings for demo/monitoring table
+// @route   GET /api/v1/analytics/readings
+// @access  Private
+exports.getLiveReadings = async (req, res, next) => {
+  try {
+    const { machineId, limit = 150 } = req.query;
+    const role = req.user?.role;
+    const omcId = req.user?.omcId;
+    const roId = req.user?.roId;
+
+    let query = `
+      SELECT 
+        th.id,
+        th.machine_name as "machineId",
+        th.temperature as "temp",
+        th.humidity as "humidity",
+        th.odour as "vocGas",
+        th.nh3 as "nh3",
+        th.h2s as "h2s",
+        th.water as "water",
+        th.created_at as "timestamp"
+      FROM telemetry_history th
+      WHERE 1=1
+    `;
+    const params = [];
+
+    if (role === 'RO Manager' && roId) {
+      params.push(roId);
+      query += ` AND th.machine_name IN (SELECT name FROM machines WHERE ro_id = $${params.length})`;
+    } else if (role === 'OMC Admin' && omcId) {
+      params.push(omcId);
+      query += ` AND th.machine_name IN (SELECT m.name FROM machines m JOIN ro r ON m.ro_id = r.id WHERE r.omc_id = $${params.length})`;
+    }
+
+    if (machineId && machineId !== 'All') {
+      params.push(machineId);
+      query += ` AND (LOWER(th.machine_name) = LOWER($${params.length}) OR REPLACE(LOWER(th.machine_name), 'o', '0') = REPLACE(LOWER($${params.length}), 'o', '0'))`;
+    }
+
+    const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 150, 10), 1000);
+    params.push(safeLimit);
+    query += ` ORDER BY th.created_at DESC LIMIT $${params.length}`;
+
+    const result = await pool.query(query, params);
+    res.status(200).json({ success: true, count: result.rows.length, data: result.rows });
+  } catch (error) {
+    next(error);
+  }
+};
