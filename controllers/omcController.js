@@ -22,7 +22,7 @@ exports.getOMCs = async (req, res, next) => {
       // Super Admin sees all
       result = await db.query(`SELECT ${safeFields} FROM omc ORDER BY LOWER(name) ASC`);
     }
-    logger.info(`[getOMCs] Called by user ${req.user?.id} (${role}), returned ${result.rows.length} rows`);
+    // logger.info([getOMCs]);
     res.status(200).json(new ApiResponse(200, result.rows, 'OMCs retrieved successfully'));
   } catch (error) { next(error); }
 };

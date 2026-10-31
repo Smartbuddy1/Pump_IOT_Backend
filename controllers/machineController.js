@@ -43,7 +43,7 @@ exports.getMachines = async (req, res, next) => {
          ORDER BY m.created_at DESC`
       );
     }
-    logger.info(`[getMachines] Called by user ${req.user?.id} (${role}), returned ${result.rows.length} rows`);
+    // logger.info([getMachines]);
     res.status(200).json(new ApiResponse(200, result.rows, 'Machines retrieved successfully'));
   } catch (error) { next(error); }
 };

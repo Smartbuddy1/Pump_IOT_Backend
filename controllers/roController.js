@@ -22,7 +22,7 @@ exports.getROs = async (req, res, next) => {
       // Super Admin sees all
       result = await db.query('SELECT * FROM ro ORDER BY LOWER(name) ASC');
     }
-    logger.info(`[getROs] Called by user ${req.user?.id} (${role}), returned ${result.rows.length} rows`);
+    // logger.info([getROs]);
     res.status(200).json(new ApiResponse(200, result.rows, 'ROs retrieved successfully'));
   } catch (error) { next(error); }
 };

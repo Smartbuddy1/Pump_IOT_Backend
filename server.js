@@ -119,22 +119,22 @@ io.use(async (socket, next) => {
 });
 
 io.on('connection', (socket) => {
-  logger.info(`Client connected to WebSockets: ${socket.id} (User: ${socket.user?.username || 'Guest'})`);
+  // logger.info(Client connected to WebSockets);
 
   // Secure automatic room assignment based on verified database record
   if (socket.user) {
     const { role, omcId, roId } = socket.user;
     if (role === 'Super Admin') {
       socket.join('super_admin');
-      logger.info(`Socket ${socket.id} auto-joined super_admin room`);
+      // logger.info(auto-joined super_admin);
     }
     if (omcId) {
       socket.join(`omc_${omcId}`);
-      logger.info(`Socket ${socket.id} auto-joined omc_${omcId} room`);
+      // logger.info(auto-joined omc);
     }
     if (roId) {
       socket.join(`ro_${roId}`);
-      logger.info(`Socket ${socket.id} auto-joined ro_${roId} room`);
+      // logger.info(auto-joined ro);
     }
   }
 
@@ -176,7 +176,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    logger.info(`Client disconnected: ${socket.id}`);
+    // logger.info(Client disconnected);
   });
 });
 
