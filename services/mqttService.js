@@ -241,7 +241,7 @@ const initMqtt = (io) => {
 
         // Sanity validation & clamping for sensor readings
         let tempVal = parseFloat(String(rawTemp || '').replace(/[^0-9.-]/g, ''));
-        if (isNaN(tempVal) || tempVal < -40 || tempVal > 100) tempVal = 28;
+        if (isNaN(tempVal) || tempVal < -40 || tempVal > 100) tempVal = 0;
         const temp = `${tempVal}°C`;
         const tempRaw = String(tempVal);
         
@@ -254,12 +254,12 @@ const initMqtt = (io) => {
         const waterStatus = rawWaterStr === 'low' || parsedWaterNum <= 20 ? 'Low' : 'Normal';
 
         let humVal = parseFloat(String(rawHum || '').replace(/[^0-9.-]/g, ''));
-        if (isNaN(humVal) || humVal < 0 || humVal > 100) humVal = 50;
+        if (isNaN(humVal) || humVal < 0 || humVal > 100) humVal = 0;
         const humidity = `${humVal}%`;
         const humRaw = String(humVal);
 
         let odourVal = parseFloat(String(rawOdour || '').replace(/[^0-9.-]/g, ''));
-        if (isNaN(odourVal) || odourVal < 0) odourVal = 40;
+        if (isNaN(odourVal) || odourVal < 0) odourVal = 0;
         if (odourVal > 100000) odourVal = 100000;
         const odour = `${odourVal} PPM`;
         const odourRaw = String(odourVal);
