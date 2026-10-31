@@ -49,7 +49,7 @@ const transports = [
 
 // Create the logger instance that has to be exported
 const logger = winston.createLogger({
-  level: process.env.NODE_ENV === 'development' ? 'debug' : 'warn',
+  level: process.env.LOG_LEVEL || (process.env.NODE_ENV === 'development' ? 'debug' : 'info'),
   levels,
   format,
   transports,

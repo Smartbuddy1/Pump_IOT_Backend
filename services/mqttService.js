@@ -62,6 +62,7 @@ const initMqtt = (io) => {
   mqttClient = mqtt.connect(MQTT_BROKER, mqttOptions);
 
   mqttClient.on('connect', () => {
+    console.log('📡 Connected to Mosquitto MQTT Broker successfully!');
     logger.info('Connected to Mosquitto MQTT Broker successfully! 📡');
     
     // Subscribe to:
@@ -102,6 +103,7 @@ const initMqtt = (io) => {
   mqttClient.on('message', async (topic, message) => {
     try {
       const payload = message.toString().trim();
+      console.log(`📩 MQTT Message: [${topic}] -> ${payload}`);
       logger.info(`[MQTT Received] Topic: ${topic} | Payload: ${payload}`);
 
       // ── Step 1: Extract Machine ID and Command from Payload & Topic ────────
@@ -173,6 +175,7 @@ const initMqtt = (io) => {
           io.to('super_admin').emit('machine_status_update', statusPayload);
           io.emit('machine_status_update', statusPayload);
         }
+        console.log(`📡 Machine Status: [${machineIdStr}] -> ${status}`);
         logger.info(`[MQTT Status] Machine ${machineIdStr} is now ${status}`);
         return;
       }
@@ -348,6 +351,7 @@ const initMqtt = (io) => {
           io.emit('machine_status_update', statusPayload);
         }
 
+        console.log(`✅ Telemetry saved for ${canonicalId}: Temp=${temp}, Hum=${humidity}, VOC=${odour}, NH3=${nh3Raw}, H2S=${h2sRaw}`);
         logger.info(`[MQTT Processed] Telemetry updated for ${machineIdStr} (Topic: ${topic})`);
         return;
       }
@@ -444,6 +448,7 @@ const initMqtt = (io) => {
               io.emit('new_alert', alertPayload);
             }
 
+            console.log(`⚠️ Alert Created: [${machineIdStr}] -> ${alertMsg} (${severity})`);
             logger.info(`[MQTT Alert Created] ${machineIdStr}: ${alertMsg} (${severity})`);
           }
         }
