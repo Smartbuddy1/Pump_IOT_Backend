@@ -112,29 +112,33 @@ io.use(async (socket, next) => {
     };
     next();
   } catch (err) {
-    logger.warn(`Socket.IO authentication verification failed: ${err.message}`);
+    if (err.name === 'TokenExpiredError') {
+      socket.tokenExpired = true;
+    } else {
+      logger.warn(`Socket.IO authentication verification failed: ${err.message}`);
+    }
     socket.user = null;
     next();
   }
 });
 
 io.on('connection', (socket) => {
-  // logger.info(Client connected to WebSockets);
+  // If token expired during handshake, notify client to refresh
+  if (socket.tokenExpired) {
+    socket.emit('token_expired');
+  }
 
   // Secure automatic room assignment based on verified database record
   if (socket.user) {
     const { role, omcId, roId } = socket.user;
     if (role === 'Super Admin') {
       socket.join('super_admin');
-      // logger.info(auto-joined super_admin);
     }
     if (omcId) {
       socket.join(`omc_${omcId}`);
-      // logger.info(auto-joined omc);
     }
     if (roId) {
       socket.join(`ro_${roId}`);
-      // logger.info(auto-joined ro);
     }
   }
 
@@ -161,12 +165,15 @@ io.on('connection', (socket) => {
           socket.user = currentUser;
         }
       } catch (err) {
-        logger.warn(`join_tenant token verification failed: ${err.message}`);
+        if (err.name === 'TokenExpiredError') {
+          socket.emit('token_expired');
+        } else {
+          logger.warn(`join_tenant token verification failed: ${err.message}`);
+        }
       }
     }
 
     if (!currentUser) {
-      logger.warn(`Unauthenticated socket ${socket.id} attempted to join_tenant. Ignored.`);
       return;
     }
     const { role, omcId, roId } = socket.user;
