@@ -162,3 +162,112 @@ exports.getLiveReadings = async (req, res, next) => {
     next(error);
   }
 };
+
+
+// @desc    Get aggregated day-wise sensor statistics for all machines
+// @route   GET /api/v1/analytics/sensor-reports
+// @access  Private
+exports.getDailySensorReports = async (req, res, next) => {
+  try {
+    const { machineId, omcId, roId, startDate, endDate } = req.query;
+    const role = req.user?.role;
+    const userOmcId = req.user?.omcId;
+    const userRoId = req.user?.roId;
+
+    let query = `
+      SELECT 
+        DATE(th.created_at) as raw_date,
+        TO_CHAR(DATE(th.created_at), 'YYYY-MM-DD') as date_ymd,
+        TO_CHAR(DATE(th.created_at), 'DD Mon YYYY') as date,
+        th.machine_name as "machineId",
+        m.id as "machineDbId",
+        COALESCE(r.name, 'RO Location') as "roName",
+        COALESCE(o.name, 'HPCL') as "omcName",
+        
+        -- Temp (Min, Avg, Max)
+        ROUND(MIN(th.temperature), 1) as "tempMin",
+        ROUND(AVG(th.temperature), 1) as "tempAvg",
+        ROUND(MAX(th.temperature), 1) as "tempMax",
+
+        -- Humidity (Min, Avg, Max)
+        ROUND(MIN(th.humidity), 1) as "humidityMin",
+        ROUND(AVG(th.humidity), 1) as "humidityAvg",
+        ROUND(MAX(th.humidity), 1) as "humidityMax",
+
+        -- VOC Gas (Min, Avg, Max)
+        ROUND(MIN(th.odour), 1) as "vocMin",
+        ROUND(AVG(th.odour), 1) as "vocAvg",
+        ROUND(MAX(th.odour), 1) as "vocMax",
+
+        -- NH3 (Min, Avg, Max)
+        ROUND(MIN(COALESCE(th.nh3, 0)), 1) as "nh3Min",
+        ROUND(AVG(COALESCE(th.nh3, 0)), 1) as "nh3Avg",
+        ROUND(MAX(COALESCE(th.nh3, 0)), 1) as "nh3Max",
+
+        -- H2S (Min, Avg, Max)
+        ROUND(MIN(COALESCE(th.h2s, 0)), 1) as "h2sMin",
+        ROUND(AVG(COALESCE(th.h2s, 0)), 1) as "h2sAvg",
+        ROUND(MAX(COALESCE(th.h2s, 0)), 1) as "h2sMax",
+
+        -- Water
+        ROUND(AVG(th.water), 1) as "waterAvg",
+
+        -- Total daily transactions / packets / cycles
+        COUNT(*) as "transactions"
+      FROM telemetry_history th
+      LEFT JOIN machines m ON (
+        LOWER(m.name) = LOWER(th.machine_name) OR 
+        REPLACE(LOWER(m.name), 'o', '0') = REPLACE(LOWER(th.machine_name), 'o', '0')
+      )
+      LEFT JOIN ro r ON m.ro_id = r.id
+      LEFT JOIN omc o ON r.omc_id = o.id
+      WHERE 1=1
+    `;
+    const params = [];
+
+    // Role-based tenant isolation
+    if (role === 'RO Manager' && userRoId) {
+      params.push(userRoId);
+      query += ` AND m.ro_id = $${params.length}`;
+    } else if (role === 'OMC Admin' && userOmcId) {
+      params.push(userOmcId);
+      query += ` AND r.omc_id = $${params.length}`;
+    }
+
+    if (omcId && omcId !== 'All') {
+      params.push(omcId);
+      query += ` AND (r.omc_id = $${params.length} OR o.id = $${params.length})`;
+    }
+
+    if (roId && roId !== 'All') {
+      params.push(roId);
+      query += ` AND m.ro_id = $${params.length}`;
+    }
+
+    if (machineId && machineId !== 'All') {
+      params.push(machineId);
+      query += ` AND (LOWER(th.machine_name) = LOWER($${params.length}) OR REPLACE(LOWER(th.machine_name), 'o', '0') = REPLACE(LOWER($${params.length}), 'o', '0'))`;
+    }
+
+    if (startDate) {
+      params.push(startDate);
+      query += ` AND DATE(th.created_at) >= $${params.length}`;
+    }
+
+    if (endDate) {
+      params.push(endDate);
+      query += ` AND DATE(th.created_at) <= $${params.length}`;
+    }
+
+    query += `
+      GROUP BY DATE(th.created_at), th.machine_name, m.id, r.name, o.name
+      ORDER BY DATE(th.created_at) DESC, th.machine_name ASC
+      LIMIT 1500
+    `;
+
+    const result = await pool.query(query, params);
+    res.status(200).json({ success: true, count: result.rows.length, data: result.rows });
+  } catch (error) {
+    next(error);
+  }
+};
