@@ -11,7 +11,7 @@ exports.getTelemetryHistory = async (req, res, next) => {
 
     let query = `
       SELECT 
-        TO_CHAR(DATE(created_at), 'DD Mon') as date,
+        TO_CHAR(DATE(created_at + INTERVAL '5 hours 30 minutes'), 'DD Mon') as date,
         ROUND(AVG(temperature), 1) as avg_temp,
         ROUND(AVG(humidity), 1) as avg_humidity,
         ROUND(AVG(odour), 1) as avg_odour,
@@ -38,15 +38,15 @@ exports.getTelemetryHistory = async (req, res, next) => {
 
     if (startDate) {
       params.push(startDate);
-      query += ` AND DATE(created_at) >= $${params.length}`;
+      query += ` AND DATE(created_at + INTERVAL '5 hours 30 minutes') >= $${params.length}`;
     }
 
     if (endDate) {
       params.push(endDate);
-      query += ` AND DATE(created_at) <= $${params.length}`;
+      query += ` AND DATE(created_at + INTERVAL '5 hours 30 minutes') <= $${params.length}`;
     }
 
-    query += ` GROUP BY DATE(created_at) ORDER BY DATE(created_at) ASC LIMIT 30`;
+    query += ` GROUP BY DATE(created_at + INTERVAL '5 hours 30 minutes') ORDER BY DATE(created_at + INTERVAL '5 hours 30 minutes') ASC LIMIT 30`;
 
     const result = await pool.query(query, params);
     res.status(200).json({ success: true, data: result.rows });
@@ -81,7 +81,7 @@ exports.getDashboardStats = async (req, res, next) => {
     const todayRes = await pool.query(`
       SELECT COUNT(*) as today_users 
       FROM telemetry_history th
-      WHERE th.created_at >= CURRENT_DATE AND th.created_at < CURRENT_DATE + INTERVAL '1 day' ${machineFilter}
+      WHERE (th.created_at + INTERVAL '5 hours 30 minutes') >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::DATE AND (th.created_at + INTERVAL '5 hours 30 minutes') < (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::DATE + INTERVAL '1 day' ${machineFilter}
     `, machineParams);
     const todayUsers = parseInt(todayRes.rows[0]?.today_users || 0, 10);
 
@@ -91,7 +91,7 @@ exports.getDashboardStats = async (req, res, next) => {
         TO_CHAR(d.day, 'Mon DD (Dy)') as full_day,
         COALESCE(COUNT(th.id), 0) as users
       FROM generate_series(CURRENT_DATE - INTERVAL '6 days', CURRENT_DATE, '1 day'::interval) d(day)
-      LEFT JOIN telemetry_history th ON th.created_at >= d.day AND th.created_at < d.day + INTERVAL '1 day' ${machineFilter}
+      LEFT JOIN telemetry_history th ON (th.created_at + INTERVAL '5 hours 30 minutes') >= d.day AND (th.created_at + INTERVAL '5 hours 30 minutes') < d.day + INTERVAL '1 day' ${machineFilter}
       GROUP BY d.day
       ORDER BY d.day ASC
     `, machineParams);
@@ -133,7 +133,7 @@ exports.getLiveReadings = async (req, res, next) => {
         COALESCE(th.nh3, 0) as "nh3",
         COALESCE(th.h2s, 0) as "h2s",
         COALESCE(th.water, 0) as "water",
-        th.created_at as "timestamp"
+        TO_CHAR(th.created_at + INTERVAL '5 hours 30 minutes', 'YYYY-MM-DD"T"HH24:MI:SS.MS+05:30') as "timestamp"
       FROM telemetry_history th
       WHERE th.created_at >= NOW() - (INTERVAL '1 day' * $1)
     `;
@@ -176,9 +176,9 @@ exports.getDailySensorReports = async (req, res, next) => {
 
     let query = `
       SELECT 
-        DATE(th.created_at) as raw_date,
-        TO_CHAR(DATE(th.created_at), 'YYYY-MM-DD') as date_ymd,
-        TO_CHAR(DATE(th.created_at), 'DD Mon YYYY') as date,
+        DATE(th.created_at + INTERVAL '5 hours 30 minutes') as raw_date,
+        TO_CHAR(DATE(th.created_at + INTERVAL '5 hours 30 minutes'), 'YYYY-MM-DD') as date_ymd,
+        TO_CHAR(DATE(th.created_at + INTERVAL '5 hours 30 minutes'), 'DD Mon YYYY') as date,
         th.machine_name as "machineId",
         m.id as "machineDbId",
         COALESCE(r.name, 'RO Location') as "roName",
@@ -260,8 +260,8 @@ exports.getDailySensorReports = async (req, res, next) => {
     }
 
     query += `
-      GROUP BY DATE(th.created_at), th.machine_name, m.id, r.name, o.name
-      ORDER BY DATE(th.created_at) DESC, th.machine_name ASC
+      GROUP BY DATE(th.created_at + INTERVAL '5 hours 30 minutes'), th.machine_name, m.id, r.name, o.name
+      ORDER BY DATE(th.created_at + INTERVAL '5 hours 30 minutes') DESC, th.machine_name ASC
       LIMIT 1500
     `;
 
