@@ -118,7 +118,7 @@ exports.getDashboardStats = async (req, res, next) => {
 // @access  Private
 exports.getLiveReadings = async (req, res, next) => {
   try {
-    const { machineId, limit = 1000, days = 2 } = req.query;
+    const { machineId, limit = 5000, days = 3 } = req.query;
     const role = req.user?.role;
     const omcId = req.user?.omcId;
     const roId = req.user?.roId;
@@ -137,7 +137,7 @@ exports.getLiveReadings = async (req, res, next) => {
       FROM telemetry_history th
       WHERE th.created_at >= NOW() - (INTERVAL '1 day' * $1)
     `;
-    const params = [parseInt(days, 10) || 2];
+    const params = [parseInt(days, 10) || 3];
 
     if (role === 'RO Manager' && roId) {
       params.push(roId);
@@ -152,7 +152,7 @@ exports.getLiveReadings = async (req, res, next) => {
       query += ` AND (LOWER(th.machine_name) = LOWER($${params.length}) OR REPLACE(LOWER(th.machine_name), 'o', '0') = REPLACE(LOWER($${params.length}), 'o', '0'))`;
     }
 
-    const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 1000, 10), 3000);
+    const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 5000, 10), 10000);
     params.push(safeLimit);
     query += ` ORDER BY th.created_at DESC LIMIT $${params.length}`;
 
