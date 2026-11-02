@@ -142,7 +142,7 @@ const initMqtt = (io) => {
       }
 
       // In-memory cached lookup for machine metadata (zero-latency tenant routing)
-      const machineInfo = await getCachedMachineInfo(machineIdStr);
+      let machineInfo = await getCachedMachineInfo(machineIdStr);
 
       // ── Step 2: Handle LWT / Machine Status Messages ───────────────────────
       // Supports:

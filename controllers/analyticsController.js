@@ -262,12 +262,12 @@ exports.getDailySensorReports = async (req, res, next) => {
 
     if (startDate) {
       params.push(startDate);
-      query += ` AND DATE(th.created_at) >= $${params.length}`;
+      query += ` AND DATE(th.created_at + INTERVAL '5 hours 30 minutes') >= $${params.length}`;
     }
 
     if (endDate) {
       params.push(endDate);
-      query += ` AND DATE(th.created_at) <= $${params.length}`;
+      query += ` AND DATE(th.created_at + INTERVAL '5 hours 30 minutes') <= $${params.length}`;
     }
 
     query += `
