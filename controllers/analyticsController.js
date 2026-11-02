@@ -118,7 +118,7 @@ exports.getDashboardStats = async (req, res, next) => {
 // @access  Private
 exports.getLiveReadings = async (req, res, next) => {
   try {
-    const { machineId, limit = 5000, days = 3 } = req.query;
+    const { machineId, limit, days } = req.query;
     const role = req.user?.role;
     const omcId = req.user?.omcId;
     const roId = req.user?.roId;
@@ -135,9 +135,15 @@ exports.getLiveReadings = async (req, res, next) => {
         COALESCE(th.water, 0) as "water",
         TO_CHAR(th.created_at + INTERVAL '5 hours 30 minutes', 'YYYY-MM-DD"T"HH24:MI:SS.MS+05:30') as "timestamp"
       FROM telemetry_history th
-      WHERE th.created_at >= NOW() - (INTERVAL '1 day' * $1)
+      WHERE 1=1
     `;
-    const params = [parseInt(days, 10) || 3];
+    const params = [];
+
+    // Optional days filter (if 'all' or omitted, returns all telemetry)
+    if (days && days !== 'all' && days !== 'unlimited') {
+      params.push(parseInt(days, 10) || 30);
+      query += ` AND th.created_at >= NOW() - (INTERVAL '1 day' * $${params.length})`;
+    }
 
     if (role === 'RO Manager' && roId) {
       params.push(roId);
@@ -152,9 +158,14 @@ exports.getLiveReadings = async (req, res, next) => {
       query += ` AND (LOWER(th.machine_name) = LOWER($${params.length}) OR REPLACE(LOWER(th.machine_name), 'o', '0') = REPLACE(LOWER($${params.length}), 'o', '0'))`;
     }
 
-    const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 5000, 10), 10000);
-    params.push(safeLimit);
-    query += ` ORDER BY th.created_at DESC LIMIT $${params.length}`;
+    query += ` ORDER BY th.created_at DESC`;
+
+    // Unlimited by default or allow up to specified limit
+    if (limit && limit !== 'all' && limit !== 'unlimited') {
+      const safeLimit = Math.max(parseInt(limit, 10) || 50000, 10);
+      params.push(safeLimit);
+      query += ` LIMIT $${params.length}`;
+    }
 
     const result = await pool.query(query, params);
     res.status(200).json({ success: true, count: result.rows.length, data: result.rows });

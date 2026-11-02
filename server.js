@@ -257,7 +257,13 @@ const runningServer = server.listen(port, () => {
   // Automated Telemetry Retention Pruning (runs 1 min after startup, then every 24 hours)
   const pruneTelemetry = async () => {
     try {
-      const days = parseInt(process.env.TELEMETRY_RETENTION_DAYS, 10) || 60;
+      const daysStr = String(process.env.TELEMETRY_RETENTION_DAYS || '').toLowerCase();
+      if (daysStr === 'unlimited' || daysStr === '0' || daysStr === 'never' || !daysStr) {
+        logger.info('[Retention] Telemetry retention set to unlimited. Records are permanently stored.');
+        return;
+      }
+      const days = parseInt(daysStr, 10);
+      if (!days || days <= 0) return;
       const pruneRes = await db.query(
         "DELETE FROM telemetry_history WHERE created_at < NOW() - (INTERVAL '1 day' * $1)",
         [days]
