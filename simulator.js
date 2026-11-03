@@ -1,5 +1,6 @@
 const mqtt = require('mqtt');
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 const pool = require('./config/db');
 
 const MQTT_BROKER = process.env.MQTT_BROKER || 'mqtt://13.232.110.133:1883';

@@ -530,6 +530,119 @@ const initMqtt = (io) => {
                 console.log(`✅ Water Alert Auto-Resolved: [${canonicalId}] -> Water level restored to Normal (1)`);
               }
             }
+
+            // ── Automated Sensor Threshold Alerts in Database (Odour, NH3, H2S, Temp) ──
+            // 2. Dangerous Odour Alert (>= 71 PPM)
+            if (odourVal >= 71) {
+              const existingOdour = await pool.query(
+                `SELECT id FROM alerts WHERE machine_id = $1 AND message LIKE '%Dangerous Odour%' AND status != 'Resolved'`,
+                [targetMachineId]
+              );
+              if (existingOdour.rows.length === 0) {
+                const odourMsg = `Dangerous Odour level detected (${odourVal} PPM >= 71 limit)`;
+                await pool.query(
+                  `INSERT INTO alerts (machine_id, severity, message, status) VALUES ($1, 'Danger', $2, 'Open')`,
+                  [targetMachineId, odourMsg]
+                );
+                const odourPayload = { machineId: canonicalId, alertMessage: odourMsg, severity: 'Danger', timestamp: new Date().toISOString() };
+                if (io) {
+                  if (machineInfo?.omc_id) io.to(`omc_${machineInfo.omc_id}`).emit('new_alert', odourPayload);
+                  if (machineInfo?.ro_id) io.to(`ro_${machineInfo.ro_id}`).emit('new_alert', odourPayload);
+                  io.to('super_admin').emit('new_alert', odourPayload);
+                  io.emit('new_alert', odourPayload);
+                }
+                console.log(`⚠️ Odour Alert Created in DB: [${canonicalId}] -> ${odourVal} PPM`);
+              }
+            } else if (odourVal < 60) {
+              await pool.query(
+                `UPDATE alerts SET status = 'Resolved' WHERE machine_id = $1 AND message LIKE '%Dangerous Odour%' AND status != 'Resolved'`,
+                [targetMachineId]
+              );
+            }
+
+            // 3. Dangerous Ammonia (NH3) Alert (>= 50 PPM)
+            if (nh3Val >= 50) {
+              const existingNh3 = await pool.query(
+                `SELECT id FROM alerts WHERE machine_id = $1 AND message LIKE '%Ammonia%' AND status != 'Resolved'`,
+                [targetMachineId]
+              );
+              if (existingNh3.rows.length === 0) {
+                const nh3Msg = `Dangerous Ammonia (NH3) level detected (${nh3Val} PPM >= 50 limit)`;
+                await pool.query(
+                  `INSERT INTO alerts (machine_id, severity, message, status) VALUES ($1, 'Danger', $2, 'Open')`,
+                  [targetMachineId, nh3Msg]
+                );
+                const nh3Payload = { machineId: canonicalId, alertMessage: nh3Msg, severity: 'Danger', timestamp: new Date().toISOString() };
+                if (io) {
+                  if (machineInfo?.omc_id) io.to(`omc_${machineInfo.omc_id}`).emit('new_alert', nh3Payload);
+                  if (machineInfo?.ro_id) io.to(`ro_${machineInfo.ro_id}`).emit('new_alert', nh3Payload);
+                  io.to('super_admin').emit('new_alert', nh3Payload);
+                  io.emit('new_alert', nh3Payload);
+                }
+                console.log(`⚠️ NH3 Alert Created in DB: [${canonicalId}] -> ${nh3Val} PPM`);
+              }
+            } else if (nh3Val < 40) {
+              await pool.query(
+                `UPDATE alerts SET status = 'Resolved' WHERE machine_id = $1 AND message LIKE '%Ammonia%' AND status != 'Resolved'`,
+                [targetMachineId]
+              );
+            }
+
+            // 4. Dangerous Hydrogen Sulfide (H2S) Alert (>= 20 PPM)
+            if (h2sVal >= 20) {
+              const existingH2s = await pool.query(
+                `SELECT id FROM alerts WHERE machine_id = $1 AND message LIKE '%Hydrogen Sulfide%' AND status != 'Resolved'`,
+                [targetMachineId]
+              );
+              if (existingH2s.rows.length === 0) {
+                const h2sMsg = `Dangerous Hydrogen Sulfide (H2S) level detected (${h2sVal} PPM >= 20 limit)`;
+                await pool.query(
+                  `INSERT INTO alerts (machine_id, severity, message, status) VALUES ($1, 'Danger', $2, 'Open')`,
+                  [targetMachineId, h2sMsg]
+                );
+                const h2sPayload = { machineId: canonicalId, alertMessage: h2sMsg, severity: 'Danger', timestamp: new Date().toISOString() };
+                if (io) {
+                  if (machineInfo?.omc_id) io.to(`omc_${machineInfo.omc_id}`).emit('new_alert', h2sPayload);
+                  if (machineInfo?.ro_id) io.to(`ro_${machineInfo.ro_id}`).emit('new_alert', h2sPayload);
+                  io.to('super_admin').emit('new_alert', h2sPayload);
+                  io.emit('new_alert', h2sPayload);
+                }
+                console.log(`⚠️ H2S Alert Created in DB: [${canonicalId}] -> ${h2sVal} PPM`);
+              }
+            } else if (h2sVal < 15) {
+              await pool.query(
+                `UPDATE alerts SET status = 'Resolved' WHERE machine_id = $1 AND message LIKE '%Hydrogen Sulfide%' AND status != 'Resolved'`,
+                [targetMachineId]
+              );
+            }
+
+            // 5. Dangerous Temperature Alert (>= 41°C)
+            if (tempVal >= 41) {
+              const existingTemp = await pool.query(
+                `SELECT id FROM alerts WHERE machine_id = $1 AND message LIKE '%High Temperature%' AND status != 'Resolved'`,
+                [targetMachineId]
+              );
+              if (existingTemp.rows.length === 0) {
+                const tempMsg = `High Temperature alert (${tempVal}°C >= 41°C limit)`;
+                await pool.query(
+                  `INSERT INTO alerts (machine_id, severity, message, status) VALUES ($1, 'Danger', $2, 'Open')`,
+                  [targetMachineId, tempMsg]
+                );
+                const tempPayload = { machineId: canonicalId, alertMessage: tempMsg, severity: 'Danger', timestamp: new Date().toISOString() };
+                if (io) {
+                  if (machineInfo?.omc_id) io.to(`omc_${machineInfo.omc_id}`).emit('new_alert', tempPayload);
+                  if (machineInfo?.ro_id) io.to(`ro_${machineInfo.ro_id}`).emit('new_alert', tempPayload);
+                  io.to('super_admin').emit('new_alert', tempPayload);
+                  io.emit('new_alert', tempPayload);
+                }
+                console.log(`⚠️ Temp Alert Created in DB: [${canonicalId}] -> ${tempVal}°C`);
+              }
+            } else if (tempVal > 0 && tempVal < 38) {
+              await pool.query(
+                `UPDATE alerts SET status = 'Resolved' WHERE machine_id = $1 AND message LIKE '%High Temperature%' AND status != 'Resolved'`,
+                [targetMachineId]
+              );
+            }
           } catch (wAlertErr) {
             logger.error(`[Water Alert Lifecycle Error]: ${wAlertErr.message}`);
           }

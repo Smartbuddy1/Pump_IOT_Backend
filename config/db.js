@@ -1,5 +1,6 @@
 const { Pool } = require('pg');
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
 let dbUrl = process.env.DATABASE_URL;
 if (dbUrl && dbUrl.includes('sslmode=require')) {
