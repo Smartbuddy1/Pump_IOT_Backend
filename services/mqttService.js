@@ -578,7 +578,7 @@ const initMqtt = (io) => {
           io.emit('machine_status_update', statusPayload);
         }
 
-        console.log(`✅ Telemetry saved for ${canonicalId}: Temp=${temp}, Hum=${humidity}, VOC=${odour}, NH3=${nh3Raw}, H2S=${h2sRaw}`);
+        console.log(`✅ Telemetry saved for ${canonicalId}: Temp=${temp}, Hum=${humidity}, VOC=${odour}, NH3=${nh3Raw}, H2S=${h2sRaw}, Water=${waterStatus} (${waterStatus === 'Normal' ? '1-Normal' : '0-Low'})`);
         logger.info(`[MQTT Processed] Telemetry updated for ${machineIdStr} (Topic: ${topic})`);
         return;
       }
