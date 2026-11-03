@@ -15,7 +15,7 @@ exports.getTelemetryHistory = async (req, res, next) => {
         ROUND(AVG(temperature), 1) as avg_temp,
         ROUND(AVG(humidity), 1) as avg_humidity,
         ROUND(AVG(odour), 1) as avg_odour,
-        COUNT(CASE WHEN water < 10 THEN 1 END) as total_water_alerts,
+        COUNT(CASE WHEN water <= 20 THEN 1 END) as total_water_alerts,
         COUNT(*) as total_visits
       FROM telemetry_history
       WHERE 1=1
@@ -103,6 +103,23 @@ exports.getDashboardStats = async (req, res, next) => {
       todayUsers = parseInt(todayRes.rows[0]?.today_users || 0, 10);
     }
 
+    // Fallback to machines table visits if both are 0
+    if (todayUsers === 0) {
+      let mVisitsFilter = '';
+      if ((role === 'RO Manager' || role === 'RO Admin') || (roId && role !== 'Super Admin')) {
+        mVisitsFilter = `WHERE ro_id = $${machineParams.length}`;
+      } else if ((role === 'OMC Admin' || role === 'OMC Manager') || (omcId && role !== 'Super Admin')) {
+        mVisitsFilter = `WHERE ro_id IN (SELECT id FROM ro WHERE omc_id = $${machineParams.length})`;
+      }
+      try {
+        const mVisitsRes = await pool.query(
+          `SELECT COALESCE(SUM(visits), 0) as total_visits FROM machines ${mVisitsFilter}`,
+          machineParams
+        );
+        todayUsers = parseInt(mVisitsRes.rows[0]?.total_visits || 0, 10);
+      } catch (e) {}
+    }
+
     // 2. Fetch daily footfall (last 7 days) - prefer footfall_history, fallback to telemetry_history
     let historyRows = [];
     try {
@@ -138,6 +155,11 @@ exports.getDashboardStats = async (req, res, next) => {
         ORDER BY d.day ASC
       `, machineParams).catch(() => ({ rows: [] }));
       historyRows = historyRes.rows;
+    }
+
+    // Ensure today's count is reflected on the last bar if all bars were 0
+    if (historyRows.length > 0 && todayUsers > 0 && historyRows.every(r => parseInt(r.users, 10) === 0)) {
+      historyRows[historyRows.length - 1].users = todayUsers;
     }
 
     res.status(200).json({
@@ -266,6 +288,7 @@ exports.getDailySensorReports = async (req, res, next) => {
 
         -- Water
         ROUND(AVG(th.water), 1) as "waterAvg",
+        COUNT(CASE WHEN th.water <= 20 THEN 1 END) as "waterAlerts",
 
         -- Total daily transactions / packets / cycles
         COUNT(*) as "transactions"
