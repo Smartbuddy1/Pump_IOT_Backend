@@ -78,29 +78,73 @@ exports.getDashboardStats = async (req, res, next) => {
       }
     }
 
-    const todayRes = await pool.query(`
-      SELECT COUNT(*) as today_users 
-      FROM telemetry_history th
-      WHERE (th.created_at + INTERVAL '5 hours 30 minutes') >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::DATE AND (th.created_at + INTERVAL '5 hours 30 minutes') < (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::DATE + INTERVAL '1 day' ${machineFilter}
-    `, machineParams);
-    const todayUsers = parseInt(todayRes.rows[0]?.today_users || 0, 10);
+    // 1. Try fetching today's footfall from dedicated footfall_history (PERSON_IN events)
+    let todayUsers = 0;
+    try {
+      const ffTodayRes = await pool.query(`
+        SELECT COUNT(*) as today_users 
+        FROM footfall_history th
+        WHERE (th.created_at + INTERVAL '5 hours 30 minutes') >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::DATE 
+          AND (th.created_at + INTERVAL '5 hours 30 minutes') < (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::DATE + INTERVAL '1 day' 
+          ${machineFilter}
+      `, machineParams);
+      todayUsers = parseInt(ffTodayRes.rows[0]?.today_users || 0, 10);
+    } catch (e) {}
 
-    const historyRes = await pool.query(`
-      SELECT 
-        TO_CHAR(d.day, 'Mon DD') as day,
-        TO_CHAR(d.day, 'Mon DD (Dy)') as full_day,
-        COALESCE(COUNT(th.id), 0) as users
-      FROM generate_series(CURRENT_DATE - INTERVAL '6 days', CURRENT_DATE, '1 day'::interval) d(day)
-      LEFT JOIN telemetry_history th ON (th.created_at + INTERVAL '5 hours 30 minutes') >= d.day AND (th.created_at + INTERVAL '5 hours 30 minutes') < d.day + INTERVAL '1 day' ${machineFilter}
-      GROUP BY d.day
-      ORDER BY d.day ASC
-    `, machineParams);
+    // Fallback to telemetry_history if footfall_history is empty
+    if (todayUsers === 0) {
+      const todayRes = await pool.query(`
+        SELECT COUNT(*) as today_users 
+        FROM telemetry_history th
+        WHERE (th.created_at + INTERVAL '5 hours 30 minutes') >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::DATE 
+          AND (th.created_at + INTERVAL '5 hours 30 minutes') < (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::DATE + INTERVAL '1 day' 
+          ${machineFilter}
+      `, machineParams).catch(() => ({ rows: [{ today_users: 0 }] }));
+      todayUsers = parseInt(todayRes.rows[0]?.today_users || 0, 10);
+    }
+
+    // 2. Fetch daily footfall (last 7 days) - prefer footfall_history, fallback to telemetry_history
+    let historyRows = [];
+    try {
+      const ffHistRes = await pool.query(`
+        SELECT 
+          TO_CHAR(d.day, 'Mon DD') as day,
+          TO_CHAR(d.day, 'Mon DD (Dy)') as full_day,
+          COALESCE(COUNT(th.id), 0) as users
+        FROM generate_series(CURRENT_DATE - INTERVAL '6 days', CURRENT_DATE, '1 day'::interval) d(day)
+        LEFT JOIN footfall_history th ON (th.created_at + INTERVAL '5 hours 30 minutes') >= d.day 
+          AND (th.created_at + INTERVAL '5 hours 30 minutes') < d.day + INTERVAL '1 day' 
+          ${machineFilter}
+        GROUP BY d.day
+        ORDER BY d.day ASC
+      `, machineParams);
+      const totalFf = ffHistRes.rows.reduce((sum, r) => sum + parseInt(r.users, 10), 0);
+      if (totalFf > 0) {
+        historyRows = ffHistRes.rows;
+      }
+    } catch (e) {}
+
+    if (historyRows.length === 0) {
+      const historyRes = await pool.query(`
+        SELECT 
+          TO_CHAR(d.day, 'Mon DD') as day,
+          TO_CHAR(d.day, 'Mon DD (Dy)') as full_day,
+          COALESCE(COUNT(th.id), 0) as users
+        FROM generate_series(CURRENT_DATE - INTERVAL '6 days', CURRENT_DATE, '1 day'::interval) d(day)
+        LEFT JOIN telemetry_history th ON (th.created_at + INTERVAL '5 hours 30 minutes') >= d.day 
+          AND (th.created_at + INTERVAL '5 hours 30 minutes') < d.day + INTERVAL '1 day' 
+          ${machineFilter}
+        GROUP BY d.day
+        ORDER BY d.day ASC
+      `, machineParams).catch(() => ({ rows: [] }));
+      historyRows = historyRes.rows;
+    }
 
     res.status(200).json({
       success: true,
       data: {
         todayUsers,
-        dailyFootfall: historyRes.rows.map(r => ({
+        dailyFootfall: historyRows.map(r => ({
           day: r.day,
           fullDay: r.full_day,
           users: parseInt(r.users, 10)

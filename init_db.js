@@ -78,6 +78,7 @@ const initDatabase = async () => {
         h2s_limit_low VARCHAR(50) DEFAULT '10',
         h2s_limit_danger VARCHAR(50) DEFAULT '20',
         water_level_trigger VARCHAR(50) DEFAULT 'Low',
+        visits INTEGER DEFAULT 0,
         last_maintenance DATE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -89,6 +90,7 @@ const initDatabase = async () => {
         ADD COLUMN IF NOT EXISTS wifi_name VARCHAR(255),
         ADD COLUMN IF NOT EXISTS wifi_password VARCHAR(255),
         ADD COLUMN IF NOT EXISTS install_date VARCHAR(50),
+        ADD COLUMN IF NOT EXISTS visits INTEGER DEFAULT 0,
         ADD COLUMN IF NOT EXISTS temp_limit_low VARCHAR(50) DEFAULT '20',
         ADD COLUMN IF NOT EXISTS temp_limit_medium VARCHAR(50) DEFAULT '30',
         ADD COLUMN IF NOT EXISTS temp_limit_danger VARCHAR(50) DEFAULT '41',
@@ -127,8 +129,22 @@ const initDatabase = async () => {
         water NUMERIC,
         humidity NUMERIC,
         odour NUMERIC,
+        nh3 NUMERIC,
+        h2s NUMERIC,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
+    `);
+
+    // 6.5. Dedicated Footfall History table (PERSON_IN events)
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS footfall_history (
+        id SERIAL PRIMARY KEY,
+        machine_name VARCHAR(100) NOT NULL,
+        machine_id INTEGER REFERENCES machines(id) ON DELETE CASCADE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_footfall_history_machine_date ON footfall_history (machine_name, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_footfall_history_created_at ON footfall_history (created_at DESC);
     `);
 
     // 7. Feedbacks table

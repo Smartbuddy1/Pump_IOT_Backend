@@ -73,11 +73,26 @@ const initMqtt = (io) => {
       'petroleum/iot/telemetry/+',
       'petroleum/iot/status/+',
       'petroleum/iot/alerts/+',
-      'petroleum/iot/commands/+'
+      'petroleum/iot/commands/+',
+      'petroleum/iot/footfall/+',
+      'petroleum/footfall/+'
     ];
     if (MQTT_TOPIC && !topicsToSubscribe.includes(MQTT_TOPIC)) {
       topicsToSubscribe.push(MQTT_TOPIC);
     }
+
+    // Auto-migrate footfall_history table and visits column on startup
+    pool.query(`
+      ALTER TABLE machines ADD COLUMN IF NOT EXISTS visits INTEGER DEFAULT 0;
+      CREATE TABLE IF NOT EXISTS footfall_history (
+        id SERIAL PRIMARY KEY,
+        machine_name VARCHAR(100) NOT NULL,
+        machine_id INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_footfall_history_machine_date ON footfall_history (machine_name, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_footfall_history_created_at ON footfall_history (created_at DESC);
+    `).catch(err => logger.error(`[DB Migration] Auto-migration error: ${err.message}`));
 
     mqttClient.subscribe(topicsToSubscribe, { qos: 1 }, (err, granted) => {
       if (err) {
@@ -125,13 +140,19 @@ const initMqtt = (io) => {
         } catch (e) {}
       }
 
-      const parts = payload.split(',');
+      const parts = payload.split(',').map(p => p.trim());
       const firstPartUpper = String(parts[0] || '').trim().toUpperCase();
-      const knownKeywords = ['LIVE_DATA', 'ALERT', 'STATUS', 'OFFLINE', 'ONLINE', 'RUNNING', 'ACTIVE', 'INACTIVE', 'SET_WIFI', 'WIFI'];
+      const secondPartUpper = String(parts[1] || '').trim().toUpperCase();
+      const knownKeywords = ['LIVE_DATA', 'ALERT', 'STATUS', 'OFFLINE', 'ONLINE', 'RUNNING', 'ACTIVE', 'INACTIVE', 'SET_WIFI', 'WIFI', 'PERSON_IN', 'PERSON-IN'];
 
       if (parsedJson && typeof parsedJson === 'object') {
         const jsonId = parsedJson.machine_id || parsedJson.machineId || parsedJson.id || parsedJson.name || parsedJson.machine || parsedJson.device_id || parsedJson.deviceId;
         if (jsonId) machineIdStr = String(jsonId).trim();
+      } else if (parts.length >= 2 && secondPartUpper === 'PERSON_IN') {
+        // Direct format: serial number,PERSON_IN (e.g. SBP2T101,PERSON_IN)
+        machineIdStr = parts[0].trim();
+      } else if (firstPartUpper === 'PERSON_IN' && parts.length >= 2) {
+        machineIdStr = parts[1].trim();
       } else if (parts.length >= 2 && !knownKeywords.includes(firstPartUpper) && !firstPartUpper.startsWith('SET_WIFI') && !firstPartUpper.startsWith('WIFI:')) {
         machineIdStr = parts[0].trim();
       }
@@ -143,6 +164,120 @@ const initMqtt = (io) => {
 
       // In-memory cached lookup for machine metadata (zero-latency tenant routing)
       let machineInfo = await getCachedMachineInfo(machineIdStr);
+
+      // ── Step 1.5: Handle FOOTFALL (PERSON_IN) Messages ─────────────────────
+      // Supports:
+      // - Payload format: serial number,PERSON_IN (e.g. SBP2T101,PERSON_IN)
+      // - Topic format: petroleum/iot/telemetry/SBP2T101 with payload 'PERSON_IN'
+      // - JSON: { "machine_id": "SBP2T101", "event": "PERSON_IN" } or { "command": "PERSON_IN" }
+      const isFootfallCsv = (parts.length >= 2 && secondPartUpper === 'PERSON_IN') ||
+                            (firstPartUpper === 'PERSON_IN') ||
+                            (payload.toUpperCase().includes('PERSON_IN'));
+      const isFootfallJson = parsedJson && (
+        String(parsedJson.event || '').toUpperCase() === 'PERSON_IN' ||
+        String(parsedJson.command || '').toUpperCase() === 'PERSON_IN' ||
+        String(parsedJson.action || '').toUpperCase() === 'PERSON_IN' ||
+        parsedJson.footfall === 1 || parsedJson.person_in === true
+      );
+
+      if (isFootfallCsv || isFootfallJson) {
+        let mId = machineInfo?.id;
+
+        // Auto-register machine if not found so no footfall count is lost
+        if (!mId) {
+          const mCheck = await pool.query(
+            `SELECT m.id, m.name, m.ro_id, r.omc_id 
+             FROM machines m 
+             LEFT JOIN ro r ON m.ro_id = r.id 
+             WHERE LOWER(m.name) = LOWER($1) 
+                OR REPLACE(LOWER(m.name), 'o', '0') = REPLACE(LOWER($1), 'o', '0') 
+             LIMIT 1`,
+            [machineIdStr]
+          );
+          if (mCheck.rows.length > 0) {
+            machineInfo = mCheck.rows[0];
+            mId = machineInfo.id;
+          } else {
+            const defaultRoRes = await pool.query('SELECT id FROM ro ORDER BY id ASC LIMIT 1');
+            const defaultRoId = defaultRoRes.rows[0]?.id || 1;
+            const newMRes = await pool.query(
+              `INSERT INTO machines (name, ro_id, type, status, visits, last_seen)
+               VALUES ($1, $2, 'Dispenser', 'Active', 1, CURRENT_TIMESTAMP)
+               RETURNING id, name, ro_id`,
+              [machineIdStr, defaultRoId]
+            );
+            machineInfo = newMRes.rows[0];
+            mId = machineInfo.id;
+            machineMetadataCache.delete(machineIdStr.toLowerCase());
+          }
+        }
+
+        const canonicalId = machineInfo?.name || machineIdStr;
+
+        // 1. Increment machine visits count in machines table
+        const updRes = await pool.query(
+          `UPDATE machines 
+           SET visits = COALESCE(visits, 0) + 1, 
+               status = 'Active', 
+               last_seen = CURRENT_TIMESTAMP 
+           WHERE id = $1 
+           RETURNING visits`,
+          [mId]
+        );
+        const updatedMachineVisits = updRes.rows[0]?.visits || 1;
+
+        // 2. Insert into dedicated footfall_history table
+        try {
+          await pool.query(
+            `INSERT INTO footfall_history (machine_name, machine_id) VALUES ($1, $2)`,
+            [canonicalId, mId]
+          );
+        } catch (fhErr) {
+          logger.error(`[MQTT Footfall] Error inserting into footfall_history: ${fhErr.message}`);
+        }
+
+        // 3. Also insert into telemetry_history for analytics compatibility
+        try {
+          await pool.query(
+            `INSERT INTO telemetry_history (machine_name, temperature, water, humidity, odour, nh3, h2s) 
+             VALUES ($1, 28, 85, 50, 20, 5, 2)`,
+            [canonicalId]
+          );
+        } catch (thErr) {}
+
+        // 4. Query updated today's total footfall count
+        let todayUsersCount = 1;
+        try {
+          const todayRes = await pool.query(`
+            SELECT COUNT(*) as today_count 
+            FROM footfall_history 
+            WHERE (created_at + INTERVAL '5 hours 30 minutes') >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::DATE
+          `);
+          todayUsersCount = parseInt(todayRes.rows[0]?.today_count || 1, 10);
+        } catch (e) {}
+
+        // 5. Emit real-time WebSocket notifications
+        const footfallPayload = {
+          machineId: canonicalId,
+          machineName: canonicalId,
+          machineIdNum: mId,
+          visits: updatedMachineVisits,
+          todayUsers: todayUsersCount,
+          timestamp: new Date().toISOString()
+        };
+
+        if (io) {
+          if (machineInfo?.omc_id) io.to(`omc_${machineInfo.omc_id}`).emit('footfall_update', footfallPayload);
+          if (machineInfo?.ro_id) io.to(`ro_${machineInfo.ro_id}`).emit('footfall_update', footfallPayload);
+          io.to('super_admin').emit('footfall_update', footfallPayload);
+          io.emit('footfall_update', footfallPayload);
+          io.emit('person_in', footfallPayload);
+        }
+
+        console.log(`🚶 Footfall Event: [${canonicalId}] -> Machine Total Visits: ${updatedMachineVisits}, Today's Total: ${todayUsersCount}`);
+        logger.info(`[MQTT Footfall] PERSON_IN event processed for ${canonicalId} (Visits: ${updatedMachineVisits})`);
+        return;
+      }
 
       // ── Step 2: Handle LWT / Machine Status Messages ───────────────────────
       // Supports:
@@ -192,24 +327,47 @@ const initMqtt = (io) => {
 
         if (isLiveJson) {
           rawTemp = parsedJson.temperature ?? parsedJson.temp ?? parsedJson.live_temp ?? '28';
-          rawWater = parsedJson.water ?? parsedJson.water_level ?? parsedJson.live_water ?? 'Normal';
           rawHum = parsedJson.humidity ?? parsedJson.hum ?? parsedJson.live_humidity ?? '50';
           rawOdour = parsedJson.voc ?? parsedJson.voc_gas ?? parsedJson.odour ?? parsedJson.odor ?? parsedJson.live_odour ?? '40';
           rawNh3 = parsedJson.nh3 ?? parsedJson.live_nh3 ?? '0';
           rawH2s = parsedJson.h2s ?? parsedJson.live_h2s ?? '0';
+
+          const jWater = parsedJson.water ?? parsedJson.water_level ?? parsedJson.live_water;
+          if (jWater === 0 || jWater === '0' || String(jWater).toLowerCase() === 'low') {
+            rawWater = 'Low';
+          } else if (jWater === 1 || jWater === '1' || String(jWater).toLowerCase() === 'normal') {
+            rawWater = 'Normal';
+          } else {
+            rawWater = jWater ?? 'Normal';
+          }
         } else {
           // If parts[1] is LIVE_DATA, data starts at index 2. If parts[0] is LIVE_DATA, data starts at index 1.
           const offset = (parts[1] === 'LIVE_DATA') ? 2 : 1;
-          const dataParts = parts.slice(offset);
+          const dataParts = parts.slice(offset).map(p => p.trim());
 
-          if (dataParts.length === 5) {
-            // Hardware format from petroleum topic: MachineID,LIVE_DATA,temp,hum,voc,nh3,h2s
+          // Check if water level is added at the end per Rahul Sir's specification:
+          // "Water level will be added as 1 or 0 in existing string at the end"
+          // "1 is normal"
+          // "0 is low level"
+          const lastDataPart = String(dataParts[dataParts.length - 1] || '').trim();
+          const isWaterAtEnd = (dataParts.length >= 6) && (
+            lastDataPart === '0' || lastDataPart === '1' || 
+            lastDataPart.toLowerCase() === 'normal' || lastDataPart.toLowerCase() === 'low'
+          );
+
+          if (isWaterAtEnd) {
+            // New Hardware format: MachineID,LIVE_DATA,temp,hum,voc,nh3,h2s,water_level
+            // E.g.: SBE2O001,LIVE_DATA,33,55,1231,627,1379,1 (1 = Normal)
+            // E.g.: SBE2O001,LIVE_DATA,33,55,1231,627,1379,0 (0 = Low Level)
+            rawTemp = dataParts[0];
+            rawHum = dataParts[1];
+            rawOdour = dataParts[2];
+            rawNh3 = dataParts[3];
+            rawH2s = dataParts[4];
+            rawWater = (lastDataPart === '1' || lastDataPart.toLowerCase() === 'normal') ? 'Normal' : 'Low';
+          } else if (dataParts.length === 5) {
+            // Hardware format from petroleum topic without water: MachineID,LIVE_DATA,temp,hum,voc,nh3,h2s
             // E.g.: SBE2O001,LIVE_DATA,33,55,1231,627,1379
-            // dataParts[0] = 33   (Temperature: 33°C)
-            // dataParts[1] = 55   (Humidity: 55%)
-            // dataParts[2] = 1231 (VOC Gas / Odour: 1231 PPM)
-            // dataParts[3] = 627  (NH3: 627 PPM)
-            // dataParts[4] = 1379 (H2S: 1379 PPM)
             rawTemp = dataParts[0];
             rawHum = dataParts[1];
             rawOdour = dataParts[2];
@@ -217,7 +375,7 @@ const initMqtt = (io) => {
             rawH2s = dataParts[4];
             rawWater = 'Normal';
           } else if (dataParts.length >= 6) {
-            // E.g. with water: SBP2T101,LIVE_DATA,28,Normal,55,1231,627,1379 or SBP2T101,LIVE_DATA,28,85,55,30,12,8
+            // Legacy / Simulator format with water at index 1: MachineID,LIVE_DATA,temp,water,hum,odour,nh3,h2s
             rawTemp = dataParts[0];
             rawWater = dataParts[1];
             rawHum = dataParts[2];
@@ -233,7 +391,7 @@ const initMqtt = (io) => {
             rawNh3 = '0';
             rawH2s = '0';
           } else {
-            rawTemp = dataParts[0];
+            rawTemp = dataParts[0] || '28';
             rawWater = dataParts[1] || 'Normal';
             rawHum = dataParts[2] || '50';
             rawOdour = dataParts[3] || '40';
@@ -248,13 +406,27 @@ const initMqtt = (io) => {
         const temp = `${tempVal}°C`;
         const tempRaw = String(tempVal);
         
-        // Clean water parsing (prevent NaN from strings like 'low' or percentage like '85%')
-        const rawWaterStr = String(rawWater || '').replace('%', '').trim().toLowerCase();
-        let parsedWaterNum = parseFloat(rawWaterStr);
-        if (isNaN(parsedWaterNum)) parsedWaterNum = (rawWaterStr === 'low' ? 10 : 80);
-        parsedWaterNum = Math.max(0, Math.min(100, parsedWaterNum));
-        const waterNumeric = parsedWaterNum;
-        const waterStatus = rawWaterStr === 'low' || parsedWaterNum <= 20 ? 'Low' : 'Normal';
+        // Clean water parsing strictly following Rahul Sir's specification:
+        // 1 is normal
+        // 0 is low level
+        let waterStatus = 'Normal';
+        let waterNumeric = 85;
+
+        const cleanWaterStr = String(rawWater || '').trim().toLowerCase();
+        if (cleanWaterStr === '0' || cleanWaterStr === 'low' || cleanWaterStr === 'empty') {
+          waterStatus = 'Low';
+          waterNumeric = 10;
+        } else if (cleanWaterStr === '1' || cleanWaterStr === 'normal' || cleanWaterStr === 'high' || cleanWaterStr === 'ok') {
+          waterStatus = 'Normal';
+          waterNumeric = 85;
+        } else {
+          let parsedWaterNum = parseFloat(cleanWaterStr.replace('%', ''));
+          if (isNaN(parsedWaterNum)) {
+            parsedWaterNum = (cleanWaterStr === 'low' ? 10 : 85);
+          }
+          waterNumeric = Math.max(0, Math.min(100, parsedWaterNum));
+          waterStatus = waterNumeric <= 20 ? 'Low' : 'Normal';
+        }
 
         let humVal = parseFloat(String(rawHum || '').replace(/[^0-9.-]/g, ''));
         if (isNaN(humVal) || humVal < 0 || humVal > 100) humVal = 0;
@@ -308,6 +480,60 @@ const initMqtt = (io) => {
         }
 
         const canonicalId = machineInfo?.name || machineIdStr;
+        const targetMachineId = machineInfo?.id;
+
+        // ── Automated Water Level Alert Lifecycle ──
+        if (targetMachineId) {
+          try {
+            if (waterStatus === 'Low') {
+              const existingAlert = await pool.query(
+                `SELECT id FROM alerts WHERE machine_id = $1 AND message LIKE '%Water Level Low%' AND status != 'Resolved'`,
+                [targetMachineId]
+              );
+              if (existingAlert.rows.length === 0) {
+                await pool.query(
+                  `INSERT INTO alerts (machine_id, severity, message, status) VALUES ($1, 'Low', 'Water Level Low - Refill required', 'Open')`,
+                  [targetMachineId]
+                );
+                const alertPayload = {
+                  machineId: canonicalId,
+                  alertMessage: 'Water Level Low - Refill required',
+                  severity: 'Low',
+                  timestamp: new Date().toISOString()
+                };
+                if (io) {
+                  if (machineInfo?.omc_id) io.to(`omc_${machineInfo.omc_id}`).emit('new_alert', alertPayload);
+                  if (machineInfo?.ro_id) io.to(`ro_${machineInfo.ro_id}`).emit('new_alert', alertPayload);
+                  io.to('super_admin').emit('new_alert', alertPayload);
+                  io.emit('new_alert', alertPayload);
+                }
+                console.log(`⚠️ Water Alert Created: [${canonicalId}] -> Water Level Low (0)`);
+                logger.info(`[Water Alert] Water level low alert generated for ${canonicalId}`);
+              }
+            } else if (waterStatus === 'Normal') {
+              // Auto-resolve any open Water Level Low alert when tank is refilled (1)
+              const resolveRes = await pool.query(
+                `UPDATE alerts SET status = 'Resolved' WHERE machine_id = $1 AND message LIKE '%Water Level Low%' AND status != 'Resolved' RETURNING id`,
+                [targetMachineId]
+              );
+              if (resolveRes.rowCount > 0 && io) {
+                const resolvePayload = {
+                  machineId: canonicalId,
+                  alertMessage: 'Water Level Low - Refill required',
+                  status: 'Resolved',
+                  timestamp: new Date().toISOString()
+                };
+                if (machineInfo?.omc_id) io.to(`omc_${machineInfo.omc_id}`).emit('alert_resolved', resolvePayload);
+                if (machineInfo?.ro_id) io.to(`ro_${machineInfo.ro_id}`).emit('alert_resolved', resolvePayload);
+                io.to('super_admin').emit('alert_resolved', resolvePayload);
+                io.emit('alert_resolved', resolvePayload);
+                console.log(`✅ Water Alert Auto-Resolved: [${canonicalId}] -> Water level restored to Normal (1)`);
+              }
+            }
+          } catch (wAlertErr) {
+            logger.error(`[Water Alert Lifecycle Error]: ${wAlertErr.message}`);
+          }
+        }
 
         // Insert into telemetry_history for analytics & graphs
         try {
@@ -330,6 +556,7 @@ const initMqtt = (io) => {
           rawMachineId: machineIdStr,
           temperature: temp,
           water: waterStatus,
+          waterLevel: waterStatus === 'Normal' ? 1 : 0,
           humidity: humidity,
           odour: odour,
           nh3: nh3Raw,

@@ -28,7 +28,17 @@ const alterTables = async () => {
       ADD COLUMN IF NOT EXISTS nh3_limit_danger VARCHAR(50),
       ADD COLUMN IF NOT EXISTS h2s_limit_low VARCHAR(50),
       ADD COLUMN IF NOT EXISTS h2s_limit_danger VARCHAR(50),
-      ADD COLUMN IF NOT EXISTS water_level_trigger VARCHAR(50);
+      ADD COLUMN IF NOT EXISTS water_level_trigger VARCHAR(50),
+      ADD COLUMN IF NOT EXISTS visits INTEGER DEFAULT 0;
+
+      CREATE TABLE IF NOT EXISTS footfall_history (
+        id SERIAL PRIMARY KEY,
+        machine_name VARCHAR(100) NOT NULL,
+        machine_id INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_footfall_history_machine_date ON footfall_history (machine_name, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_footfall_history_created_at ON footfall_history (created_at DESC);
     `);
 
     console.log('Columns added successfully! 🎉');

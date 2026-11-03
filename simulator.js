@@ -42,23 +42,36 @@ async function startSimulator() {
     setInterval(() => {
       machineNames.forEach(mName => {
         const temp = (Math.random() * (35 - 24) + 24).toFixed(1); // 24 to 35 C (normal)
-        const water = (Math.random() * (90 - 40) + 40).toFixed(1); // 40 to 90% (normal)
         const humidity = (Math.random() * (60 - 40) + 40).toFixed(1); // 40 to 60% (normal)
         const odour = (Math.random() * (25 - 5) + 5).toFixed(1); // 5 to 25 PPM (clean)
         const nh3 = (Math.random() * (15 - 2) + 2).toFixed(1); // 2 to 15 PPM
         const h2s = (Math.random() * (10 - 1) + 1).toFixed(1); // 1 to 10 PPM
+        const waterLevel = Math.random() > 0.1 ? 1 : 0; // 90% normal (1), 10% low level (0)
 
-        const payload = `${mName},LIVE_DATA,${temp},${water},${humidity},${odour},${nh3},${h2s}`;
+        // New Hardware format: MachineID,LIVE_DATA,temp,hum,voc,nh3,h2s,water_level
+        const payload = `${mName},LIVE_DATA,${temp},${humidity},${odour},${nh3},${h2s},${waterLevel}`;
 
         // 1. Publish to unified topic 'petroleum'
         client.publish(MAIN_TOPIC, payload, () => {
-          console.log(`Published [${MAIN_TOPIC}]: ${payload}`);
+          console.log(`Published [${MAIN_TOPIC}]: ${payload} (Water: ${waterLevel === 1 ? 'Normal' : 'Low'})`);
         });
 
         // 2. Also publish to legacy topic
         client.publish(`petroleum/iot/telemetry/${mName}`, payload);
       });
     }, 4000);
+
+    // Footfall simulator (serial number,PERSON_IN) per hardware specification
+    setInterval(() => {
+      if (machineNames.length === 0) return;
+      const mName = machineNames[Math.floor(Math.random() * machineNames.length)];
+      const footfallPayload = `${mName},PERSON_IN`;
+
+      client.publish(MAIN_TOPIC, footfallPayload, () => {
+        console.log(`🚶 Published Footfall [${MAIN_TOPIC}]: ${footfallPayload}`);
+      });
+      client.publish(`petroleum/iot/telemetry/${mName}`, 'PERSON_IN');
+    }, 8000);
 
     // Occasional alert generator
     setInterval(() => {
