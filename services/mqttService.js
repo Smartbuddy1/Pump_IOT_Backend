@@ -236,16 +236,7 @@ const initMqtt = (io) => {
           logger.error(`[MQTT Footfall] Error inserting into footfall_history: ${fhErr.message}`);
         }
 
-        // 3. Also insert into telemetry_history for analytics compatibility
-        try {
-          await pool.query(
-            `INSERT INTO telemetry_history (machine_name, temperature, water, humidity, odour, nh3, h2s) 
-             VALUES ($1, 28, 85, 50, 20, 5, 2)`,
-            [canonicalId]
-          );
-        } catch (thErr) {}
-
-        // 4. Query updated today's total footfall count
+        // 3. Query updated today's total footfall count (PERSON_IN events only)
         let todayUsersCount = 1;
         try {
           const todayRes = await pool.query(`

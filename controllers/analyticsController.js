@@ -80,7 +80,7 @@ exports.getDashboardStats = async (req, res, next) => {
       }
     }
 
-    // 1. Try fetching today's footfall from dedicated footfall_history (PERSON_IN events)
+    // 1. Fetch today's footfall strictly from dedicated footfall_history (PERSON_IN events only)
     let todayUsers = 0;
     try {
       const ffTodayRes = await pool.query(`
@@ -91,38 +91,11 @@ exports.getDashboardStats = async (req, res, next) => {
           ${machineFilter}
       `, machineParams);
       todayUsers = parseInt(ffTodayRes.rows[0]?.today_users || 0, 10);
-    } catch (e) {}
-
-    // Fallback to telemetry_history if footfall_history is empty
-    if (todayUsers === 0) {
-      const todayRes = await pool.query(`
-        SELECT COUNT(*) as today_users 
-        FROM telemetry_history th
-        WHERE (th.created_at + INTERVAL '5 hours 30 minutes') >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::DATE 
-          AND (th.created_at + INTERVAL '5 hours 30 minutes') < (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::DATE + INTERVAL '1 day' 
-          ${machineFilter}
-      `, machineParams).catch(() => ({ rows: [{ today_users: 0 }] }));
-      todayUsers = parseInt(todayRes.rows[0]?.today_users || 0, 10);
+    } catch (e) {
+      logger.error(`[Analytics] Error fetching today's footfall: ${e.message}`);
     }
 
-    // Fallback to machines table visits if both are 0
-    if (todayUsers === 0) {
-      let mVisitsFilter = '';
-      if ((role === 'RO Manager' || role === 'RO Admin') || (roId && role !== 'Super Admin')) {
-        mVisitsFilter = `WHERE ro_id = $${machineParams.length}`;
-      } else if ((role === 'OMC Admin' || role === 'OMC Manager') || (omcId && role !== 'Super Admin')) {
-        mVisitsFilter = `WHERE ro_id IN (SELECT id FROM ro WHERE omc_id = $${machineParams.length})`;
-      }
-      try {
-        const mVisitsRes = await pool.query(
-          `SELECT COALESCE(SUM(visits), 0) as total_visits FROM machines ${mVisitsFilter}`,
-          machineParams
-        );
-        todayUsers = parseInt(mVisitsRes.rows[0]?.total_visits || 0, 10);
-      } catch (e) {}
-    }
-
-    // 2. Fetch daily footfall (last 7 days) - prefer footfall_history, fallback to telemetry_history
+    // 2. Fetch daily footfall (last 7 days) strictly from footfall_history
     let historyRows = [];
     try {
       const ffHistRes = await pool.query(`
@@ -137,26 +110,9 @@ exports.getDashboardStats = async (req, res, next) => {
         GROUP BY d.day
         ORDER BY d.day ASC
       `, machineParams);
-      const totalFf = ffHistRes.rows.reduce((sum, r) => sum + parseInt(r.users, 10), 0);
-      if (totalFf > 0) {
-        historyRows = ffHistRes.rows;
-      }
-    } catch (e) {}
-
-    if (historyRows.length === 0) {
-      const historyRes = await pool.query(`
-        SELECT 
-          TO_CHAR(d.day, 'Mon DD') as day,
-          TO_CHAR(d.day, 'Mon DD (Dy)') as full_day,
-          COALESCE(COUNT(th.id), 0) as users
-        FROM generate_series(CURRENT_DATE - INTERVAL '6 days', CURRENT_DATE, '1 day'::interval) d(day)
-        LEFT JOIN telemetry_history th ON (th.created_at + INTERVAL '5 hours 30 minutes') >= d.day 
-          AND (th.created_at + INTERVAL '5 hours 30 minutes') < d.day + INTERVAL '1 day' 
-          ${machineFilter}
-        GROUP BY d.day
-        ORDER BY d.day ASC
-      `, machineParams).catch(() => ({ rows: [] }));
-      historyRows = historyRes.rows;
+      historyRows = ffHistRes.rows || [];
+    } catch (e) {
+      logger.error(`[Analytics] Error fetching daily footfall: ${e.message}`);
     }
 
     // Ensure today's count is reflected on the last bar if all bars were 0
