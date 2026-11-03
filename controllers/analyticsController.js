@@ -15,6 +15,8 @@ exports.getTelemetryHistory = async (req, res, next) => {
         ROUND(AVG(temperature), 1) as avg_temp,
         ROUND(AVG(humidity), 1) as avg_humidity,
         ROUND(AVG(odour), 1) as avg_odour,
+        ROUND(AVG(COALESCE(nh3, 0)), 1) as avg_nh3,
+        ROUND(AVG(COALESCE(h2s, 0)), 1) as avg_h2s,
         COUNT(CASE WHEN water <= 20 THEN 1 END) as total_water_alerts,
         COUNT(*) as total_visits
       FROM telemetry_history
