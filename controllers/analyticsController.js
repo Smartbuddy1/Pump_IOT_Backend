@@ -9,46 +9,80 @@ exports.getTelemetryHistory = async (req, res, next) => {
     const omcId = req.user?.omcId;
     const roId = req.user?.roId;
 
-    let query = `
-      SELECT 
-        TO_CHAR(DATE(created_at + INTERVAL '5 hours 30 minutes'), 'DD Mon') as date,
-        ROUND(AVG(temperature), 1) as avg_temp,
-        ROUND(AVG(humidity), 1) as avg_humidity,
-        ROUND(AVG(odour), 1) as avg_odour,
-        ROUND(AVG(COALESCE(nh3, 0)), 1) as avg_nh3,
-        ROUND(AVG(COALESCE(h2s, 0)), 1) as avg_h2s,
-        COUNT(CASE WHEN water <= 20 THEN 1 END) as total_water_alerts,
-        COUNT(*) as total_visits
-      FROM telemetry_history
-      WHERE 1=1
-    `;
+    let thWhere = '1=1';
+    let fhWhere = '1=1';
     const params = [];
 
     // Tenant isolation — restrict by role
     if (role === 'RO Manager' && roId) {
       params.push(roId);
-      query += ` AND machine_name IN (SELECT name FROM machines WHERE ro_id = $${params.length})`;
+      const pIdx = params.length;
+      thWhere += ` AND machine_name IN (SELECT name FROM machines WHERE ro_id = $${pIdx})`;
+      fhWhere += ` AND machine_name IN (SELECT name FROM machines WHERE ro_id = $${pIdx})`;
     } else if (role === 'OMC Admin' && omcId) {
       params.push(omcId);
-      query += ` AND machine_name IN (SELECT m.name FROM machines m JOIN ro r ON m.ro_id = r.id WHERE r.omc_id = $${params.length})`;
+      const pIdx = params.length;
+      thWhere += ` AND machine_name IN (SELECT m.name FROM machines m JOIN ro r ON m.ro_id = r.id WHERE r.omc_id = $${pIdx})`;
+      fhWhere += ` AND machine_name IN (SELECT m.name FROM machines m JOIN ro r ON m.ro_id = r.id WHERE r.omc_id = $${pIdx})`;
     }
 
     if (machineId && machineId !== 'All') {
       params.push(machineId);
-      query += ` AND machine_name = $${params.length}`;
+      const pIdx = params.length;
+      thWhere += ` AND (LOWER(machine_name) = LOWER($${pIdx}) OR REPLACE(LOWER(machine_name), 'o', '0') = REPLACE(LOWER($${pIdx}), 'o', '0'))`;
+      fhWhere += ` AND (LOWER(machine_name) = LOWER($${pIdx}) OR REPLACE(LOWER(machine_name), 'o', '0') = REPLACE(LOWER($${pIdx}), 'o', '0'))`;
     }
 
     if (startDate) {
       params.push(startDate);
-      query += ` AND DATE(created_at + INTERVAL '5 hours 30 minutes') >= $${params.length}`;
+      const pIdx = params.length;
+      thWhere += ` AND DATE(created_at + INTERVAL '5 hours 30 minutes') >= $${pIdx}::DATE`;
+      fhWhere += ` AND DATE(created_at + INTERVAL '5 hours 30 minutes') >= $${pIdx}::DATE`;
     }
 
     if (endDate) {
       params.push(endDate);
-      query += ` AND DATE(created_at + INTERVAL '5 hours 30 minutes') <= $${params.length}`;
+      const pIdx = params.length;
+      thWhere += ` AND DATE(created_at + INTERVAL '5 hours 30 minutes') <= $${pIdx}::DATE`;
+      fhWhere += ` AND DATE(created_at + INTERVAL '5 hours 30 minutes') <= $${pIdx}::DATE`;
     }
 
-    query += ` GROUP BY DATE(created_at + INTERVAL '5 hours 30 minutes') ORDER BY DATE(created_at + INTERVAL '5 hours 30 minutes') ASC LIMIT 30`;
+    const query = `
+      SELECT 
+        TO_CHAR(d_th.day, 'DD Mon') as date,
+        d_th.avg_temp,
+        d_th.avg_humidity,
+        d_th.avg_odour,
+        d_th.avg_nh3,
+        d_th.avg_h2s,
+        d_th.avg_water,
+        d_th.total_water_alerts,
+        COALESCE(d_fh.visits, 0) as total_visits
+      FROM (
+        SELECT 
+          DATE(created_at + INTERVAL '5 hours 30 minutes') as day,
+          ROUND(AVG(temperature), 1) as avg_temp,
+          ROUND(AVG(humidity), 1) as avg_humidity,
+          ROUND(AVG(odour), 1) as avg_odour,
+          ROUND(AVG(COALESCE(nh3, 0)), 1) as avg_nh3,
+          ROUND(AVG(COALESCE(h2s, 0)), 1) as avg_h2s,
+          ROUND(AVG(water), 1) as avg_water,
+          COUNT(CASE WHEN water <= 20 THEN 1 END) as total_water_alerts
+        FROM telemetry_history
+        WHERE ${thWhere}
+        GROUP BY DATE(created_at + INTERVAL '5 hours 30 minutes')
+      ) d_th
+      LEFT JOIN (
+        SELECT 
+          DATE(created_at + INTERVAL '5 hours 30 minutes') as day,
+          COUNT(*) as visits
+        FROM footfall_history
+        WHERE ${fhWhere}
+        GROUP BY DATE(created_at + INTERVAL '5 hours 30 minutes')
+      ) d_fh ON d_th.day = d_fh.day
+      ORDER BY d_th.day ASC
+      LIMIT 30
+    `;
 
     const result = await pool.query(query, params);
     res.status(200).json({ success: true, data: result.rows });
@@ -103,7 +137,7 @@ exports.getDashboardStats = async (req, res, next) => {
           TO_CHAR(d.day, 'Mon DD') as day,
           TO_CHAR(d.day, 'Mon DD (Dy)') as full_day,
           COALESCE(COUNT(th.id), 0) as users
-        FROM generate_series(CURRENT_DATE - INTERVAL '6 days', CURRENT_DATE, '1 day'::interval) d(day)
+        FROM generate_series((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::DATE - INTERVAL '6 days', (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::DATE, '1 day'::interval) d(day)
         LEFT JOIN footfall_history th ON (th.created_at + INTERVAL '5 hours 30 minutes') >= d.day 
           AND (th.created_at + INTERVAL '5 hours 30 minutes') < d.day + INTERVAL '1 day' 
           ${machineFilter}
@@ -197,7 +231,6 @@ exports.getLiveReadings = async (req, res, next) => {
     next(error);
   }
 };
-
 
 // @desc    Get aggregated day-wise sensor statistics for all machines
 // @route   GET /api/v1/analytics/sensor-reports
@@ -299,6 +332,82 @@ exports.getDailySensorReports = async (req, res, next) => {
       GROUP BY DATE(th.created_at + INTERVAL '5 hours 30 minutes'), th.machine_name, m.id, r.name, o.name
       ORDER BY DATE(th.created_at + INTERVAL '5 hours 30 minutes') DESC, th.machine_name ASC
       LIMIT 1500
+    `;
+
+    const result = await pool.query(query, params);
+    res.status(200).json({ success: true, count: result.rows.length, data: result.rows });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getFootfallReports = async (req, res, next) => {
+  try {
+    const { machineId, roId, omcId, startDate, endDate } = req.query;
+    const role = req.user?.role;
+    const userOmcId = req.user?.omcId;
+    const userRoId = req.user?.roId;
+
+    let query = `
+      SELECT 
+        COALESCE(m.name, fh.machine_name) as "machineId",
+        m.id as "machine_db_id",
+        m.ro_id as "ro_id",
+        COALESCE(r.name, m.ro_name, 'RO Location') as "roName",
+        o.id as "omc_id",
+        COALESCE(o.name, 'OMC') as "omcName",
+        TO_CHAR(DATE(fh.created_at + INTERVAL '5 hours 30 minutes'), 'YYYY-MM-DD') as "date",
+        TO_CHAR(DATE(fh.created_at + INTERVAL '5 hours 30 minutes'), 'DD Mon YYYY') as "dateFormatted",
+        COUNT(fh.id)::int as "visits"
+      FROM footfall_history fh
+      LEFT JOIN machines m ON (
+        LOWER(m.name) = LOWER(fh.machine_name) OR 
+        REPLACE(LOWER(m.name), 'o', '0') = REPLACE(LOWER(fh.machine_name), 'o', '0')
+      )
+      LEFT JOIN ro r ON m.ro_id = r.id
+      LEFT JOIN omc o ON r.omc_id = o.id
+      WHERE 1=1
+    `;
+    const params = [];
+
+    // Role-based tenant isolation
+    if (role === 'RO Manager' && userRoId) {
+      params.push(userRoId);
+      query += ` AND m.ro_id = $${params.length}`;
+    } else if (role === 'OMC Admin' && userOmcId) {
+      params.push(userOmcId);
+      query += ` AND r.omc_id = $${params.length}`;
+    }
+
+    if (omcId && omcId !== 'All') {
+      params.push(omcId);
+      query += ` AND (r.omc_id = $${params.length} OR o.id = $${params.length})`;
+    }
+
+    if (roId && roId !== 'All') {
+      params.push(roId);
+      query += ` AND m.ro_id = $${params.length}`;
+    }
+
+    if (machineId && machineId !== 'All') {
+      params.push(machineId);
+      query += ` AND (LOWER(fh.machine_name) = LOWER($${params.length}) OR REPLACE(LOWER(fh.machine_name), 'o', '0') = REPLACE(LOWER($${params.length}), 'o', '0'))`;
+    }
+
+    if (startDate) {
+      params.push(startDate);
+      query += ` AND DATE(fh.created_at + INTERVAL '5 hours 30 minutes') >= $${params.length}::DATE`;
+    }
+
+    if (endDate) {
+      params.push(endDate);
+      query += ` AND DATE(fh.created_at + INTERVAL '5 hours 30 minutes') <= $${params.length}::DATE`;
+    }
+
+    query += `
+      GROUP BY COALESCE(m.name, fh.machine_name), m.id, m.ro_id, r.name, m.ro_name, o.id, o.name, DATE(fh.created_at + INTERVAL '5 hours 30 minutes')
+      ORDER BY DATE(fh.created_at + INTERVAL '5 hours 30 minutes') DESC, "machineId" ASC
+      LIMIT 2000
     `;
 
     const result = await pool.query(query, params);
