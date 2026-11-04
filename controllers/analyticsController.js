@@ -353,7 +353,7 @@ exports.getFootfallReports = async (req, res, next) => {
         COALESCE(m.name, fh.machine_name) as "machineId",
         m.id as "machine_db_id",
         m.ro_id as "ro_id",
-        COALESCE(r.name, m.ro_name, 'RO Location') as "roName",
+        COALESCE(r.name, 'RO Location') as "roName",
         o.id as "omc_id",
         COALESCE(o.name, 'OMC') as "omcName",
         TO_CHAR(DATE(fh.created_at + INTERVAL '5 hours 30 minutes'), 'YYYY-MM-DD') as "date",
@@ -405,7 +405,7 @@ exports.getFootfallReports = async (req, res, next) => {
     }
 
     query += `
-      GROUP BY COALESCE(m.name, fh.machine_name), m.id, m.ro_id, r.name, m.ro_name, o.id, o.name, DATE(fh.created_at + INTERVAL '5 hours 30 minutes')
+      GROUP BY COALESCE(m.name, fh.machine_name), m.id, m.ro_id, r.name, o.id, o.name, DATE(fh.created_at + INTERVAL '5 hours 30 minutes')
       ORDER BY DATE(fh.created_at + INTERVAL '5 hours 30 minutes') DESC, "machineId" ASC
       LIMIT 2000
     `;
