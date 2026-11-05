@@ -634,6 +634,34 @@ const initMqtt = (io) => {
                 [targetMachineId]
               );
             }
+
+            // 6. Dangerous Humidity Alert (>= 76%)
+            if (humVal >= 76) {
+              const existingHum = await pool.query(
+                `SELECT id FROM alerts WHERE machine_id = $1 AND message LIKE '%Humidity%' AND status != 'Resolved'`,
+                [targetMachineId]
+              );
+              if (existingHum.rows.length === 0) {
+                const humMsg = `High Humidity alert (${humVal}% >= 76% limit)`;
+                await pool.query(
+                  `INSERT INTO alerts (machine_id, severity, message, status) VALUES ($1, 'Danger', $2, 'Open')`,
+                  [targetMachineId, humMsg]
+                );
+                const humPayload = { machineId: canonicalId, alertMessage: humMsg, severity: 'Danger', timestamp: new Date().toISOString() };
+                if (io) {
+                  if (machineInfo?.omc_id) io.to(`omc_${machineInfo.omc_id}`).emit('new_alert', humPayload);
+                  if (machineInfo?.ro_id) io.to(`ro_${machineInfo.ro_id}`).emit('new_alert', humPayload);
+                  io.to('super_admin').emit('new_alert', humPayload);
+                  io.emit('new_alert', humPayload);
+                }
+                console.log(`⚠️ Humidity Alert Created in DB: [${canonicalId}] -> ${humVal}%`);
+              }
+            } else if (humVal > 0 && humVal < 70) {
+              await pool.query(
+                `UPDATE alerts SET status = 'Resolved' WHERE machine_id = $1 AND message LIKE '%Humidity%' AND status != 'Resolved'`,
+                [targetMachineId]
+              );
+            }
           } catch (wAlertErr) {
             logger.error(`[Water Alert Lifecycle Error]: ${wAlertErr.message}`);
           }

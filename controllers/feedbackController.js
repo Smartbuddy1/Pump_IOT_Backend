@@ -63,6 +63,16 @@ exports.submitFeedback = async (req, res, next) => {
       return res.status(400).json(new ApiResponse(400, null, 'Valid rating between 1 and 5 stars is required'));
     }
 
+    let cleanPhone = null;
+    if (userPhone && String(userPhone).trim()) {
+      const p = String(userPhone).replace(/\D/g, '');
+      if (p.length === 10 && /^[6-9]\d{9}$/.test(p)) {
+        cleanPhone = p;
+      } else {
+        return res.status(400).json(new ApiResponse(400, null, 'Please provide a valid 10-digit Indian mobile number'));
+      }
+    }
+
     const cleanMachineName = String(machineName || machineId || '').trim();
     let resolvedMachineId = null;
     let resolvedRoId = null;
@@ -109,7 +119,7 @@ exports.submitFeedback = async (req, res, next) => {
       numRating,
       reasonsString,
       comment || '',
-      userPhone || null,
+      cleanPhone || null,
       userName || null
     ]);
 
