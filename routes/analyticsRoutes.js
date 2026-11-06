@@ -5,7 +5,8 @@ const {
   getDashboardStats, 
   getLiveReadings, 
   getDailySensorReports,
-  getFootfallReports
+  getFootfallReports,
+  getFootfallReadings
 } = require('../controllers/analyticsController');
 const { protect } = require('../middlewares/authMiddleware');
 
@@ -17,5 +18,6 @@ router.get('/readings', getLiveReadings);
 router.get('/sensor-reports', getDailySensorReports);
 router.get('/footfall-reports', getFootfallReports);
 router.get('/usage-reports', getFootfallReports);
+router.get('/footfall-readings', getFootfallReadings);
 
 module.exports = router;

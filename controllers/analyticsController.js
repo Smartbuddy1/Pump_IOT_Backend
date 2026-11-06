@@ -4,10 +4,10 @@ const pool = require('../config/db');
 
 exports.getTelemetryHistory = async (req, res, next) => {
   try {
-    const { machineId, startDate, endDate } = req.query;
+    const { machineId, startDate, endDate, omcId: qOmcId, roId: qRoId } = req.query;
     const role = req.user?.role;
-    const omcId = req.user?.omcId;
-    const roId = req.user?.roId;
+    const omcId = req.user?.omcId || qOmcId;
+    const roId = req.user?.roId || qRoId;
 
     let thWhere = '1=1';
     let fhWhere = '1=1';
@@ -24,6 +24,19 @@ exports.getTelemetryHistory = async (req, res, next) => {
       const pIdx = params.length;
       thWhere += ` AND machine_name IN (SELECT m.name FROM machines m JOIN ro r ON m.ro_id = r.id WHERE r.omc_id = $${pIdx})`;
       fhWhere += ` AND machine_name IN (SELECT m.name FROM machines m JOIN ro r ON m.ro_id = r.id WHERE r.omc_id = $${pIdx})`;
+    } else {
+      if (omcId && omcId !== 'All') {
+        params.push(omcId);
+        const pIdx = params.length;
+        thWhere += ` AND machine_name IN (SELECT m.name FROM machines m JOIN ro r ON m.ro_id = r.id WHERE r.omc_id = $${pIdx} OR r.omc_id::text = $${pIdx})`;
+        fhWhere += ` AND machine_name IN (SELECT m.name FROM machines m JOIN ro r ON m.ro_id = r.id WHERE r.omc_id = $${pIdx} OR r.omc_id::text = $${pIdx})`;
+      }
+      if (roId && roId !== 'All') {
+        params.push(roId);
+        const pIdx = params.length;
+        thWhere += ` AND machine_name IN (SELECT name FROM machines WHERE ro_id = $${pIdx} OR ro_id::text = $${pIdx})`;
+        fhWhere += ` AND machine_name IN (SELECT name FROM machines WHERE ro_id = $${pIdx} OR ro_id::text = $${pIdx})`;
+      }
     }
 
     if (machineId && machineId !== 'All') {
@@ -33,32 +46,34 @@ exports.getTelemetryHistory = async (req, res, next) => {
       fhWhere += ` AND (LOWER(machine_name) = LOWER($${pIdx}) OR REPLACE(LOWER(machine_name), 'o', '0') = REPLACE(LOWER($${pIdx}), 'o', '0'))`;
     }
 
+    let startParamIdx = null;
+    let endParamIdx = null;
+
     if (startDate) {
       params.push(startDate);
-      const pIdx = params.length;
-      thWhere += ` AND DATE(created_at + INTERVAL '5 hours 30 minutes') >= $${pIdx}::DATE`;
-      fhWhere += ` AND DATE(created_at + INTERVAL '5 hours 30 minutes') >= $${pIdx}::DATE`;
+      startParamIdx = params.length;
     }
 
     if (endDate) {
       params.push(endDate);
-      const pIdx = params.length;
-      thWhere += ` AND DATE(created_at + INTERVAL '5 hours 30 minutes') <= $${pIdx}::DATE`;
-      fhWhere += ` AND DATE(created_at + INTERVAL '5 hours 30 minutes') <= $${pIdx}::DATE`;
+      endParamIdx = params.length;
     }
 
+    const startExpr = startParamIdx ? `$${startParamIdx}::DATE` : `(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::DATE - INTERVAL '6 days'`;
+    const endExpr = endParamIdx ? `$${endParamIdx}::DATE` : `(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::DATE`;
+
+    thWhere += ` AND DATE(created_at + INTERVAL '5 hours 30 minutes') >= ${startExpr} AND DATE(created_at + INTERVAL '5 hours 30 minutes') <= ${endExpr}`;
+    fhWhere += ` AND DATE(created_at + INTERVAL '5 hours 30 minutes') >= ${startExpr} AND DATE(created_at + INTERVAL '5 hours 30 minutes') <= ${endExpr}`;
+
     const query = `
-      SELECT 
-        TO_CHAR(d_th.day, 'DD Mon') as date,
-        d_th.avg_temp,
-        d_th.avg_humidity,
-        d_th.avg_odour,
-        d_th.avg_nh3,
-        d_th.avg_h2s,
-        d_th.avg_water,
-        d_th.total_water_alerts,
-        COALESCE(d_fh.visits, 0) as total_visits
-      FROM (
+      WITH date_range AS (
+        SELECT generate_series(
+          ${startExpr},
+          ${endExpr},
+          '1 day'::interval
+        )::DATE as day
+      ),
+      d_th AS (
         SELECT 
           DATE(created_at + INTERVAL '5 hours 30 minutes') as day,
           ROUND(AVG(temperature), 1) as avg_temp,
@@ -71,17 +86,31 @@ exports.getTelemetryHistory = async (req, res, next) => {
         FROM telemetry_history
         WHERE ${thWhere}
         GROUP BY DATE(created_at + INTERVAL '5 hours 30 minutes')
-      ) d_th
-      LEFT JOIN (
+      ),
+      d_fh AS (
         SELECT 
           DATE(created_at + INTERVAL '5 hours 30 minutes') as day,
           COUNT(*) as visits
         FROM footfall_history
         WHERE ${fhWhere}
         GROUP BY DATE(created_at + INTERVAL '5 hours 30 minutes')
-      ) d_fh ON d_th.day = d_fh.day
-      ORDER BY d_th.day ASC
-      LIMIT 30
+      )
+      SELECT 
+        TO_CHAR(dr.day, 'DD Mon') as date,
+        TO_CHAR(dr.day, 'YYYY-MM-DD') as date_ymd,
+        d_th.avg_temp,
+        d_th.avg_humidity,
+        d_th.avg_odour,
+        d_th.avg_nh3,
+        d_th.avg_h2s,
+        d_th.avg_water,
+        COALESCE(d_th.total_water_alerts, 0) as total_water_alerts,
+        COALESCE(d_fh.visits, 0) as total_visits
+      FROM date_range dr
+      LEFT JOIN d_th ON dr.day = d_th.day
+      LEFT JOIN d_fh ON dr.day = d_fh.day
+      ORDER BY dr.day ASC
+      LIMIT 120
     `;
 
     const result = await pool.query(query, params);
@@ -409,6 +438,68 @@ exports.getFootfallReports = async (req, res, next) => {
       ORDER BY DATE(fh.created_at + INTERVAL '5 hours 30 minutes') DESC, "machineId" ASC
       LIMIT 2000
     `;
+
+    const result = await pool.query(query, params);
+    res.status(200).json({ success: true, count: result.rows.length, data: result.rows });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Get raw footfall readings/events for timeline & hourly charts
+// @route   GET /api/v1/analytics/footfall-readings
+// @access  Private
+exports.getFootfallReadings = async (req, res, next) => {
+  try {
+    const { machineId, limit, days, omcId: qOmcId, roId: qRoId } = req.query;
+    const role = req.user?.role;
+    const omcId = req.user?.omcId || qOmcId;
+    const roId = req.user?.roId || qRoId;
+
+    let query = `
+      SELECT 
+        fh.id,
+        fh.machine_name as "machineId",
+        TO_CHAR(fh.created_at + INTERVAL '5 hours 30 minutes', 'YYYY-MM-DD"T"HH24:MI:SS.MS+05:30') as "timestamp"
+      FROM footfall_history fh
+      WHERE 1=1
+    `;
+    const params = [];
+
+    if (days && days !== 'all' && days !== 'unlimited') {
+      params.push(parseInt(days, 10) || 7);
+      query += ` AND fh.created_at >= NOW() - (INTERVAL '1 day' * $${params.length})`;
+    }
+
+    if (role === 'RO Manager' && roId) {
+      params.push(roId);
+      query += ` AND fh.machine_name IN (SELECT name FROM machines WHERE ro_id = $${params.length})`;
+    } else if (role === 'OMC Admin' && omcId) {
+      params.push(omcId);
+      query += ` AND fh.machine_name IN (SELECT m.name FROM machines m JOIN ro r ON m.ro_id = r.id WHERE r.omc_id = $${params.length})`;
+    } else {
+      if (omcId && omcId !== 'All') {
+        params.push(omcId);
+        query += ` AND fh.machine_name IN (SELECT m.name FROM machines m JOIN ro r ON m.ro_id = r.id WHERE r.omc_id = $${params.length} OR r.omc_id::text = $${params.length})`;
+      }
+      if (roId && roId !== 'All') {
+        params.push(roId);
+        query += ` AND fh.machine_name IN (SELECT name FROM machines WHERE ro_id = $${params.length} OR ro_id::text = $${params.length})`;
+      }
+    }
+
+    if (machineId && machineId !== 'All') {
+      params.push(machineId);
+      query += ` AND (LOWER(fh.machine_name) = LOWER($${params.length}) OR REPLACE(LOWER(fh.machine_name), 'o', '0') = REPLACE(LOWER($${params.length}), 'o', '0'))`;
+    }
+
+    query += ` ORDER BY fh.created_at DESC`;
+
+    const safeLimit = (limit && limit !== 'all' && limit !== 'unlimited')
+      ? Math.max(parseInt(limit, 10) || 5000, 10)
+      : 10000;
+    params.push(safeLimit);
+    query += ` LIMIT $${params.length}`;
 
     const result = await pool.query(query, params);
     res.status(200).json({ success: true, count: result.rows.length, data: result.rows });
